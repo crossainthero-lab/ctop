@@ -1,0 +1,29 @@
+[package]
+name = "ctop"
+version = "0.1.0"
+description = "CtoP — Computer to Pencil"
+authors = ["CtoP"]
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "ctop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# default-features = false: no libudev dependency; we enumerate /dev/serial/by-id ourselves.
+serialport = { version = "4", default-features = false }
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
