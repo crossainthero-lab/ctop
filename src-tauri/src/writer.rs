@@ -177,7 +177,7 @@ impl Writer {
             }
             "surfaceZ" => {
                 let z = value.as_f64().ok_or("surface height must be a number")?;
-                if !(0.0..=150.0).contains(&z) {
+                if !(-50.0..=150.0).contains(&z) {
                     return Err("surface height out of range".into());
                 }
             }

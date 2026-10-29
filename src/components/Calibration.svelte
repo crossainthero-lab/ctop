@@ -16,7 +16,7 @@
   let inflight = false, zInflight = false;
   $effect(() => { const p = st.controller.pos; if (p && !inflight && !zInflight) pos = [p[0], p[1], p[2]]; });
   let note = $state('');
-  const zMin = 0; // no limit of ours; the controller's floor follows what you ask for
+  const zMin = -20; // no limit of ours; the controller's floor and the firmware soft limit follow what you ask for
 
   let speed = $state(15);
   const joy = $derived<JoyOpts>({ ...DEFAULT_JOY, speedMmS: speed });

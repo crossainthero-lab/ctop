@@ -139,7 +139,7 @@ impl FrameProfile {
         if !self.skew_deg.is_finite() || self.skew_deg.abs() > 5.0 {
             return Err("A paper skew of more than 5 degrees means the sheet is not seated in the frame; check it and measure again.".into());
         }
-        if !(0.0..=200.0).contains(&self.surface_z) || !self.surface_z.is_finite() {
+        if !(-50.0..=200.0).contains(&self.surface_z) || !self.surface_z.is_finite() {
             return Err("The pen contact height is not valid.".into());
         }
         if !self.plane_gx.is_finite() || !self.plane_gy.is_finite() || self.plane_gx.abs() > 0.02 || self.plane_gy.abs() > 0.02 {

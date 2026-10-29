@@ -45,14 +45,14 @@ pub fn allowed(cmd: &str) -> bool {
         return false;
     }
     match c {
-        "!status" | "!progress" | "!cancel" | "!estop" | "!draw off" | "!draw on" => return true,
+        "!status" | "!progress" | "!cancel" | "!estop" | "!draw off" | "!draw on" | "!softoff" => return true,
         // XY-only homing with the pen raised; the controller itself refuses below Z 30 and needs this exact confirmation word.
         "!homexy confirmed" => return true,
         _ => {}
     }
     // lowering the controller's Z floor (it never goes below its own hard minimum)
     if let Some(n) = c.strip_prefix("!zfloor ") {
-        return n.parse::<f64>().map(|v| v.is_finite() && (0.0..=150.0).contains(&v)).unwrap_or(false);
+        return n.parse::<f64>().map(|v| v.is_finite() && (-100.0..=150.0).contains(&v)).unwrap_or(false);
     }
     if let Some(n) = c.strip_prefix("!log ") {
         return !n.is_empty() && n.len() <= 5 && n.chars().all(|ch| ch.is_ascii_digit());
@@ -131,6 +131,8 @@ pub struct CtlStatus {
     pub zup: Option<f64>,
     #[serde(alias = "zhard_max")]
     pub zhard_max: Option<f64>,
+    #[serde(default, alias = "soft_off")]
+    pub soft_off: bool,
     #[serde(alias = "zhard_min")]
     pub zhard_min: Option<f64>,
     pub init: bool,
@@ -895,6 +897,7 @@ impl Ctl {
         if z < zfloor.max(z_min) - 1e-9 {
             // the controller's floor is just a setting: lower it to what was asked for (its own hard minimum still applies)
             let hard = st.zhard_min.unwrap_or(0.0);
+            self.ensure_soft_off(&st, z)?;
             if z < hard - 1e-9 {
                 return Err(format!("Z {z:.2} is below the controller's hard minimum ({hard:.1} mm)."));
             }
@@ -913,10 +916,23 @@ impl Ctl {
         Ok(parse_pos(&reply).unwrap_or([st.pos.unwrap()[0], st.pos.unwrap()[1], z]))
     }
 
+    /// The firmware's own soft endstops refuse Z below 0. A pen mounted short touches below that, so they are switched off when a
+    /// height at or below 0 is asked for (the pen tip is always lower than the nozzle, so the nozzle never reaches the bed).
+    fn ensure_soft_off(&self, st: &CtlStatus, z: f64) -> Result<(), String> {
+        if z <= 0.5 && !st.soft_off {
+            let r = send(&self.sock(), "!softoff", Duration::from_secs(8))?;
+            if r.contains("REFUSED") {
+                return Err(r);
+            }
+        }
+        Ok(())
+    }
+
     /// Make sure the controller's Z floor is at or below `z` (used before drawing at a low pen-down height).
     pub fn ensure_floor(&self, z: f64) -> Result<(), String> {
         let st = self.fresh_status()?;
         let hard = st.zhard_min.unwrap_or(0.0);
+        self.ensure_soft_off(&st, z)?;
         let want = z.max(hard);
         if st.zfloor.map(|f| f > want + 1e-9).unwrap_or(false) {
             let r = send(&self.sock(), &format!("!zfloor {want:.2}"), Duration::from_secs(5))?;

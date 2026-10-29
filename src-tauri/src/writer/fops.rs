@@ -678,7 +678,7 @@ impl Writer {
     /// Record the current pen height as the contact height (Pen Height section). Only within the verified range.
     pub fn contact_here(&self) -> Result<Value, String> {
         let z = self.ctl.fresh_status()?.pos.ok_or("position unknown")?[2];
-        if !(0.0..=150.0).contains(&z) {
+        if !(-50.0..=150.0).contains(&z) {
             return Err(format!("{z:.2} mm is not a possible pen height."));
         }
         let mut p = self.active_frame().ok_or("Calibrate the frame position first.")?;
