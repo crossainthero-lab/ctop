@@ -15,7 +15,7 @@ export interface JoyOpts {
   flipY?: boolean;
 }
 
-export const DEFAULT_JOY: JoyOpts = { speedMmS: 12, tickMs: 140, deadzone: 0.1, maxStepMm: 5 };
+export const DEFAULT_JOY: JoyOpts = { speedMmS: 12, tickMs: 140, deadzone: 0.1, maxStepMm: 20 };
 
 /** Stick deflection (vx right, vy DOWN on screen, each -1..1 as a fraction of the radius) -> one machine step, or null. */
 export function stepFromStick(vx: number, vy: number, o: JoyOpts): { dx: number; dy: number } | null {
@@ -49,27 +49,20 @@ export function deflection(px: number, py: number, cx: number, cy: number, radiu
 }
 
 // ───────── vertical pen-height stick ─────────
-// Physical up = machine Z increasing (the pen rises); down = Z decreasing (toward the paper).
-export const Z_MIN_VERIFIED = 13.5;
+// Physical up = machine Z increasing (the pen rises); down = Z decreasing (toward the paper). No limit of our own: the controller has its floor.
+
 export interface ZOpts {
   tickMs: number;
   deadzone: number;
   /** biggest step far from the paper, mm */
   farStepMm: number;
-  /** biggest downward step within `nearMm` of the contact height, mm (the backend refuses more than 0.35) */
-  nearStepMm: number;
-  nearMm: number;
-  zMin: number;
 }
-export const DEFAULT_Z: ZOpts = { tickMs: 220, deadzone: 0.12, farStepMm: 1.0, nearStepMm: 0.3, nearMm: 3, zMin: Z_MIN_VERIFIED };
+export const DEFAULT_Z: ZOpts = { tickMs: 220, deadzone: 0.12, farStepMm: 1.0 };
 
-/** Stick deflection (v: +1 = pushed fully UP, -1 = fully DOWN) -> a Z step in mm (+ raises), or null. Never goes below zMin. */
-export function zStepFromStick(v: number, zNow: number, contact: number, o: ZOpts): number | null {
-  if (!isFinite(v) || !isFinite(zNow) || Math.abs(v) < o.deadzone) return null;
+/** Stick deflection (v: +1 = pushed fully UP, -1 = fully DOWN) -> a Z step in mm (+ raises), or null. */
+export function zStepFromStick(v: number, _zNow: number, _contact: number, o: ZOpts): number | null {
+  if (!isFinite(v) || Math.abs(v) < o.deadzone) return null;
   const m = Math.min(1, Math.abs(v)), curve = Math.pow((m - o.deadzone) / (1 - o.deadzone), 1.4);
-  if (v > 0) { const d = o.farStepMm * curve; return d < 0.02 ? null : d; }
-  const near = zNow - contact <= o.nearMm;
-  let d = (near ? o.nearStepMm : o.farStepMm) * curve;
-  d = Math.min(d, Math.max(0, zNow - o.zMin)); // never below the verified limit
-  return d < 0.02 ? null : -d;
+  const d = o.farStepMm * curve;
+  return d < 0.02 ? null : v > 0 ? d : -d;
 }

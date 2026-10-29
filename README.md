@@ -89,9 +89,8 @@ camera again. The machine only moves while you drag the joystick or press a butt
    to redo if the points cannot be an A4 sheet.
 3. **Save calibration.** The preview then shows the real position of the sheet and the part the plotter cannot reach.
 4. **Pen height, on the same screen.** Next to the joystick is a vertical stick: push up to raise the pen, down to lower it
-   (physical directions; the number shown is the controller's real Z, where lower Z is nearer the paper). Within 3 mm of the
-   contact height it only steps down 0.3 mm at a time, it never goes below 13.5 mm, and with a verified sheet it will not lower
-   the pen onto the paper where there is no sheet. `-0.5 -0.1 +0.1 +0.5` fine buttons and **Raise pen** are beside it. Lower the
+   (physical directions; the number shown is the controller's real Z, where lower Z is nearer the paper). CtoP adds no height limit of its own: only the
+   controller's hard floor applies. `-0.5 -0.1 +0.1 +0.5` fine buttons and **Raise pen** are beside it. Lower the
    pen until the tip just touches (watch the side camera), press **Pen touches here**, set **Writing pressure**, press
    **Test dot**, then **Save pen height**. Contact height, pressure (so pen-down = contact - pressure) and pen-up height are saved with
    the frame and used by Text, Image and Lined paper. If dots ink in some places but not others the page says so: the sheet is

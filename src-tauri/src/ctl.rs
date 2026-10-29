@@ -45,7 +45,7 @@ pub fn allowed(cmd: &str) -> bool {
         return false;
     }
     match c {
-        "!status" | "!progress" | "!cancel" | "!estop" | "!draw off" => return true,
+        "!status" | "!progress" | "!cancel" | "!estop" | "!draw off" | "!draw on" => return true,
         // XY-only homing with the pen raised; the controller itself refuses below Z 30 and needs this exact confirmation word.
         "!homexy confirmed" => return true,
         _ => {}
@@ -777,12 +777,20 @@ impl Ctl {
     }
 
     pub(crate) fn do_move(&self, cmd: &str) -> Result<String, String> {
-        // `!draw off` makes sure XY moves are only allowed at pen-up height
-        let r = send(&self.sock(), "!draw off", Duration::from_secs(5))?;
+        self.do_move_mode(cmd, false)
+    }
+
+    /// `draw` = true lets the controller move sideways with the pen below its pen-up height (the pen drags). Mode goes back to off afterwards.
+    pub(crate) fn do_move_mode(&self, cmd: &str, draw: bool) -> Result<String, String> {
+        let r = send(&self.sock(), if draw { "!draw on" } else { "!draw off" }, Duration::from_secs(5))?;
         if r.contains("REFUSED") {
             return Err(r);
         }
-        let reply = send(&self.sock(), cmd, Duration::from_secs(90))?;
+        let reply = send(&self.sock(), cmd, Duration::from_secs(90));
+        if draw {
+            let _ = send(&self.sock(), "!draw off", Duration::from_secs(5));
+        }
+        let reply = reply?;
         self.set_reply(&reply);
         if reply.contains("REFUSED") || reply.contains("FW-ERROR") || reply.contains("MISMATCH") || !reply.contains("VERIFIED") {
             return Err(format!("controller: {}", reply.lines().last().unwrap_or("")));
@@ -850,23 +858,21 @@ impl Ctl {
     /// clamped to the controller's box (0.5 mm inside). Returns the position the controller reports and whether it was clamped.
     pub fn jog_vec(&self, dx: f64, dy: f64, feed: f64) -> Result<([f64; 3], bool), String> {
         let _op = self.op.lock().unwrap();
-        if !dx.is_finite() || !dy.is_finite() || dx.abs() > 6.0 || dy.abs() > 6.0 {
-            return Err("a joystick step is at most 6 mm".into());
+        if !dx.is_finite() || !dy.is_finite() || dx.abs() > 50.0 || dy.abs() > 50.0 {
+            return Err("a step is at most 50 mm".into());
         }
         let st = self.fresh_status()?;
         self.manual_guard(&st)?;
         let pos = st.pos.ok_or("position unknown")?;
         let zup = st.zup.ok_or("no zup")?;
-        if pos[2] < zup - 0.01 {
-            return Err(format!("The pen is too low to move sideways (Z {:.1}). Press Pen Up first.", pos[2]));
-        }
+        let low = pos[2] < zup - 0.01; // pen below the controller's pen-up height: allowed, the pen then drags
         let b = st.bbox.ok_or("no box")?;
         let (tx, ty) = ((pos[0] + dx).clamp(b[0] + 0.5, b[1] - 0.5), (pos[1] + dy).clamp(b[2] + 0.5, b[3] - 0.5));
         if (tx - pos[0]).abs() < 1e-6 && (ty - pos[1]).abs() < 1e-6 {
             return Ok((pos, true));
         }
         let clamped = (tx - (pos[0] + dx)).abs() > 1e-6 || (ty - (pos[1] + dy)).abs() > 1e-6;
-        let reply = self.do_move(&format!("G1 X{tx:.3} Y{ty:.3} F{:.0}", feed.clamp(60.0, 4000.0)))?;
+        let reply = self.do_move_mode(&format!("G1 X{tx:.3} Y{ty:.3} F{:.0}", feed.clamp(60.0, 4000.0)), low)?;
         Ok((parse_pos(&reply).unwrap_or([tx, ty, pos[2]]), clamped))
     }
 
@@ -878,7 +884,7 @@ impl Ctl {
         let zfloor = st.zfloor.ok_or("no zfloor")?;
         let zmax = st.zhard_max.unwrap_or(150.0);
         if !z.is_finite() || z < zfloor.max(z_min) - 1e-9 {
-            return Err(format!("Z {z:.2} is below the safe limit ({:.2} mm)", zfloor.max(z_min)));
+            return Err(format!("Z {z:.2} is below the controller's own floor ({:.2} mm). That floor is set in the controller, not in CtoP.", zfloor.max(z_min)));
         }
         if z > zmax {
             return Err(format!("Z {z:.2} is above the controller maximum {zmax:.2}"));
@@ -1264,11 +1270,11 @@ mod tests {
 
     #[test]
     fn whitelist_blocks_everything_dangerous() {
-        for ok in ["!status", "!progress", "!cancel", "!estop", "!draw off", "!log 50", "G1 X10.000 Y20.5 F3000", "G1 Z24.000 F300", "!homexy confirmed", "!jobcheck /tmp/a/b.json", "!jobfile /home/u/x.json"] {
+        for ok in ["!status", "!progress", "!cancel", "!estop", "!draw off", "!draw on", "!log 50", "G1 X10.000 Y20.5 F3000", "G1 Z24.000 F300", "!homexy confirmed", "!jobcheck /tmp/a/b.json", "!jobfile /home/u/x.json"] {
             assert!(allowed(ok), "{ok}");
         }
         for bad in [
-            "!home", "!home confirmed", "!homexy", "!homexy now", "!homexy  confirmed x", "!adopt 1 2 3 4 5", "!rearm confirmed", "!box 0 1 0 1", "!zfloor 1", "!zup 99", "!nopencil confirmed", "!pencil", "!draw on",
+            "!home", "!home confirmed", "!homexy", "!homexy now", "!homexy  confirmed x", "!adopt 1 2 3 4 5", "!rearm confirmed", "!box 0 1 0 1", "!zfloor 1", "!zup 99", "!nopencil confirmed", "!pencil",
             "G28", "G92 X0", "G91", "M104 S200", "M140 S60", "M109 S200", "M112", "M410", "M106 S255", "G1 X1 E5", "G1", "G1 Xabc", "G1 X1; M104 S200", "G1 X1\nM104 S200",
             "!jobfile relative.json", "!jobfile /tmp/a b.json", "!jobfile /tmp/../etc/x.json", "!jobfile /tmp/x.txt", "!log abc", "!status extra", "", "G0 X1", "M105",
         ] {

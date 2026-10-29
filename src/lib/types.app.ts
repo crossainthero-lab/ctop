@@ -41,7 +41,7 @@ export interface AppState {
   note: string | null;
   progress: { done: number; total: number } | null;
   error: { stage: string; message: string; detail: string; atMs: number } | null;
-  controller: { reachable: boolean; error: string | null; ready: boolean; blockers: string[]; pos: number[] | null; box: number[] | null; estop: boolean; sock: string };
+  controller: { zfloor?: number | null; reachable: boolean; error: string | null; ready: boolean; blockers: string[]; pos: number[] | null; box: number[] | null; estop: boolean; sock: string };
   camera: { url: string; reachable: boolean; error: string | null; paperSeen: boolean; lastOkMs: number | null; streaming?: boolean; hubState?: string | null };
   cal: { rmsMm: number; looMm: number | null; pose: number[]; created: number; poseDeltaMm: number | null; poseOk: boolean } | null;
   defaultPose: number[];

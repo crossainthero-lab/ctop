@@ -497,12 +497,11 @@ impl Writer {
 }
 
 static JOG_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// The lowest pen height the joystick page will ever command, whatever the controller's own floor is (verified safe limit).
-pub const Z_MIN_VERIFIED: f64 = 13.5;
 
 impl Writer {
+    /// No limit of CtoP's own: only the controller's hard floor applies (it refuses anything lower itself).
     fn z_min(&self) -> f64 {
-        self.setting_f("zMin", Z_MIN_VERIFIED).max(Z_MIN_VERIFIED)
+        0.0
     }
 
     /// Contact height at pen X/Y from the saved frame (a tilted plane), else the surfaceZ setting.
@@ -562,9 +561,7 @@ impl Writer {
     }
 
     /// Move the pen straight down/up by at most 1 mm at the current X/Y: the vertical slider and the fine buttons. Like the
-    /// joystick it is single-flight and drops stale requests. Near the paper (within 3 mm of the contact height) a downward step is at most
-    /// 0.35 mm, and with a verified frame the pen is not lowered onto the paper unless it is over the sheet. Never below the
-    /// verified limit (13.5 mm) or the controller's own floor.
+    /// joystick it is single-flight and drops stale requests. The only floor is the controller's own.
     pub fn z_nudge(&self, dz: f64, sent_ms: Option<u64>) -> Result<Value, String> {
         use std::sync::atomic::{AtomicBool, Ordering};
         static Z_BUSY: AtomicBool = AtomicBool::new(false);
@@ -588,19 +585,6 @@ impl Writer {
 
     fn z_nudge_inner(&self, dz: f64) -> Result<Value, String> {
         let pos = self.ctl.fresh_status()?.pos.ok_or("position unknown")?;
-        if dz < 0.0 {
-            let contact = self.contact_at(pos[0], pos[1]);
-            if pos[2] - contact < 3.0 + 1e-9 && -dz > 0.35 + 1e-9 {
-                return Err("Near the paper the pen moves down in steps of at most 0.35 mm.".into());
-            }
-            if pos[2] + dz < contact + 1.0 {
-                if let Some(f) = self.active_frame().filter(|f| f.verified) {
-                    if !f.over_sheet(pos[0], pos[1], 4.0) {
-                        return Err("The pen is not over the sheet: it will not be lowered onto the paper here.".into());
-                    }
-                }
-            }
-        }
         self.ctl.confirm_sheet("calibration", true)?;
         let p = self.ctl.move_z(pos[2] + dz, self.z_min(), if dz < 0.0 { 60.0 } else { 300.0 })?;
         Ok(json!({ "pos": p, "contact": self.contact_at(p[0], p[1]), "zMin": self.z_min() }))
@@ -670,13 +654,6 @@ impl Writer {
         if let Some(u) = pen_up {
             p.pen_up_z = Some(u.round());
         }
-        let down = p.surface_z - p.pen_depth.unwrap_or_else(|| self.setting_f("depth", 0.6));
-        if down < self.z_min() {
-            return Err(format!("Pen-down would be {down:.2} mm, below the verified limit of {:.1} mm. Use less pressure.", self.z_min()));
-        }
-        if p.surface_z < self.z_min() || p.surface_z > 30.0 {
-            return Err("That contact height is outside the range a contact height can have.".into());
-        }
         self.set_setting("surfaceZ", json!(p.surface_z))?;
         if let Some(d) = p.pen_depth {
             self.set_setting("depth", json!(d))?;
@@ -697,8 +674,8 @@ impl Writer {
     /// Record the current pen height as the contact height (Pen Height section). Only within the verified range.
     pub fn contact_here(&self) -> Result<Value, String> {
         let z = self.ctl.fresh_status()?.pos.ok_or("position unknown")?[2];
-        if z < self.z_min() || z > 30.0 {
-            return Err(format!("{z:.2} mm is outside the range a contact height can have ({:.1} - 30 mm).", self.z_min()));
+        if !(0.0..=150.0).contains(&z) {
+            return Err(format!("{z:.2} mm is not a possible pen height."));
         }
         let mut p = self.active_frame().ok_or("Calibrate the frame position first.")?;
         p.surface_z = (z * 100.0).round() / 100.0;

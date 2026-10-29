@@ -66,14 +66,9 @@ describe('vertical stick', () => {
     expect(zStepFromStick(-1, 30, 15.3, DEFAULT_Z)!).toBeLessThan(0);
   });
   it('does nothing in the dead zone', () => expect(zStepFromStick(0.05, 30, 15.3, DEFAULT_Z)).toBeNull());
-  it('steps down in small increments near the paper', () => {
-    const far = Math.abs(zStepFromStick(-1, 25, 15.3, DEFAULT_Z)!), near = Math.abs(zStepFromStick(-1, 17, 15.3, DEFAULT_Z)!);
-    expect(far).toBeCloseTo(1.0, 6); expect(near).toBeLessThanOrEqual(0.3 + 1e-9);
-  });
-  it('never asks to go below the verified minimum', () => {
-    expect(13.55 + (zStepFromStick(-1, 13.55, 15.3, DEFAULT_Z) ?? 0)).toBeGreaterThanOrEqual(13.5 - 1e-9);
-    const s = zStepFromStick(-1, 13.8, 15.3, DEFAULT_Z)!; expect(13.8 + s).toBeGreaterThanOrEqual(13.5 - 1e-9);
-    expect(zStepFromStick(-1, 13.5, 15.3, DEFAULT_Z)).toBeNull();
+  it('has no limit of its own near the paper or at low heights', () => {
+    expect(zStepFromStick(-1, 14, 15.3, DEFAULT_Z)!).toBeCloseTo(-1.0, 6);
+    expect(zStepFromStick(-1, 5, 15.3, DEFAULT_Z)!).toBeLessThan(0);
   });
   it('raising is allowed from the lowest height', () => expect(zStepFromStick(1, 13.5, 15.3, DEFAULT_Z)!).toBeGreaterThan(0));
 });

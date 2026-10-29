@@ -443,7 +443,7 @@ impl Writer {
         json!({
             "phase": phase, "message": message, "progress": progress, "note": ack_note,
             "error": failure.map(|f| json!({ "stage": f.stage, "message": f.message, "detail": diag::redact(&f.detail), "atMs": f.at_ms })),
-            "controller": { "reachable": cs.reachable, "error": cs.error, "ready": ctl_ready, "blockers": cs.unsafe_reasons, "pos": pos,
+            "controller": { "zfloor": cs.status.as_ref().and_then(|s| s.zfloor), "reachable": cs.reachable, "error": cs.error, "ready": ctl_ready, "blockers": cs.unsafe_reasons, "pos": pos,
                 "box": cs.status.as_ref().and_then(|s| s.bbox), "estop": cs.status.as_ref().map(|s| s.estop).unwrap_or(false), "sock": cs.sock },
             "camera": cam_json,
             "cal": cal_json, "defaultPose": default_pose,
