@@ -38,7 +38,7 @@ export interface FontMetrics {
 export const LINE_PITCH = 1.5; // line pitch / cap height at lineSpacing = 1
 
 /** Break a paragraph into lines no wider than maxWidth (Infinity = no wrapping). */
-function wrapParagraph(par: string, width: (s: string) => number, maxWidth: number): string[] {
+export function wrapParagraph(par: string, width: (s: string) => number, maxWidth: number): string[] {
   if (!isFinite(maxWidth) || width(par) <= maxWidth) return [par];
   const lines: string[] = [];
   let cur = '';

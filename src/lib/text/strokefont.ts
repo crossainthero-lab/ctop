@@ -18,16 +18,22 @@ const CURATED: { id: string; name: string }[] = [
   { id: 'timesr', name: 'Serif' },
   { id: 'timesrb', name: 'Serif bold' },
   { id: 'timesi', name: 'Serif italic' },
-  { id: 'scripts', name: 'Script (single stroke)' },
-  { id: 'cursive', name: 'Script (alternate)' },
-  { id: 'scriptc', name: 'Script medium' },
+  { id: 'scripts', name: 'Handwriting: script' },
+  { id: 'cursive', name: 'Handwriting: cursive' },
+  { id: 'scriptc', name: 'Handwriting: script medium' },
   { id: 'gothiceng', name: 'Gothic English' },
+  { id: 'mono:futural', name: 'Monospace (single stroke)' },
+  { id: 'mono:timesr', name: 'Monospace serif (single stroke)' },
 ];
+
+/** Monospace variants: every character takes the same advance, the glyph is centred in its cell. */
+export const MONO_PREFIX = 'mono:';
+const MONO_CELL_UNITS = 22;
 
 const fonts = hershey as unknown as Record<string, RawFont>;
 
 export function listStrokeFonts(): { id: string; name: string }[] {
-  return CURATED.filter((f) => fonts[f.id]);
+  return CURATED.filter((f) => fonts[f.id.replace(MONO_PREFIX, '')]);
 }
 
 export const DEFAULT_STROKE_FONT = 'futural';
@@ -58,8 +64,24 @@ function glyphTable(fontId: string) {
 }
 
 export function strokeFontMetrics(fontId: string, sizeMm: number): FontMetrics {
-  const table = glyphTable(fontId);
+  const mono = fontId.startsWith(MONO_PREFIX);
+  const table = glyphTable(mono ? fontId.slice(MONO_PREFIX.length) : fontId);
   const k = sizeMm / CAP_UNITS;
+  if (mono) {
+    return {
+      advance(ch) {
+        if (ch === ' ') return MONO_CELL_UNITS * k;
+        if (ch === '\t') return MONO_CELL_UNITS * 4 * k;
+        return table.has(ch) ? MONO_CELL_UNITS * k : null;
+      },
+      glyph(ch, x, baselineY) {
+        const g = table.get(ch);
+        if (!g) return [];
+        const dx = (MONO_CELL_UNITS - g.advance) / 2;
+        return g.strokes.map((s) => s.map(([gx, gy]): Pt => [x + (gx + dx) * k, baselineY + (gy - BASELINE_UNITS) * k]));
+      },
+    };
+  }
   return {
     advance(ch) {
       if (ch === ' ') return SPACE_UNITS * k;

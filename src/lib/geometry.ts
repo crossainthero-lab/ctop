@@ -110,26 +110,42 @@ export const dropShort = (ss: Stroke[], minLen: number): Stroke[] =>
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
-/** Merge strokes whose end/start (either orientation) are within gap. Greedy, deterministic. */
+/** Merge strokes whose end/start (either orientation) are within gap. Greedy, deterministic. (grid-indexed endpoints) */
 export function joinNearby(ss: Stroke[], gap: number): Stroke[] {
   const pool = ss.filter((s) => s.length).map((s) => s.slice());
   const out: Stroke[] = [];
   const used = new Array(pool.length).fill(false);
+  const cell = Math.max(gap, 1e-9);
+  const key = (x: number, y: number) => Math.floor(x / cell) * 73856093 ^ Math.floor(y / cell) * 19349663;
+  // cell -> [stroke index, 0 = start / 1 = end]
+  const grid = new Map<number, [number, number][]>();
+  const put = (x: number, y: number, j: number, e: number) => { const k = key(x, y), l = grid.get(k); if (l) l.push([j, e]); else grid.set(k, [[j, e]]); };
+  pool.forEach((o, j) => { put(o[0][0], o[0][1], j, 0); put(o[o.length - 1][0], o[o.length - 1][1], j, 1); });
+  const near = (p: Pt, f: (j: number, e: number, d: number) => void) => {
+    const cx = Math.floor(p[0] / cell), cy = Math.floor(p[1] / cell);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      const l = grid.get((cx + dx) * 73856093 ^ (cy + dy) * 19349663);
+      if (!l) continue;
+      for (const [j, e] of l) {
+        if (used[j]) continue;
+        const q = e === 0 ? pool[j][0] : pool[j][pool[j].length - 1];
+        f(j, e, dist(p, q));
+      }
+    }
+  };
   for (let i = 0; i < pool.length; i++) {
     if (used[i]) continue;
     used[i] = true;
     let cur = pool[i];
     for (;;) {
-      let best = -1, bestD = gap, mode = 0; // mode: 0 end->start,1 end->end,2 start->end,3 start->start
-      for (let j = 0; j < pool.length; j++) {
-        if (used[j]) continue;
-        const o = pool[j];
-        const cands: [number, number][] = [
-          [dist(cur[cur.length - 1], o[0]), 0], [dist(cur[cur.length - 1], o[o.length - 1]), 1],
-          [dist(cur[0], o[o.length - 1]), 2], [dist(cur[0], o[0]), 3],
-        ];
-        for (const [d, m] of cands) if (d <= bestD && (best < 0 || d < bestD)) { best = j; bestD = d; mode = m; }
-      }
+      // mode: 0 end->start,1 end->end,2 start->end,3 start->start; ties: lowest j, then lowest mode
+      let best = -1, bestD = gap, mode = 0;
+      const consider = (j: number, m: number, d: number) => {
+        if (d > gap) return;
+        if (best < 0 || d < bestD || (d === bestD && (j < best || (j === best && m < mode)))) { best = j; bestD = d; mode = m; }
+      };
+      near(cur[cur.length - 1], (j, e, d) => consider(j, e === 0 ? 0 : 1, d));
+      near(cur[0], (j, e, d) => consider(j, e === 1 ? 2 : 3, d));
       if (best < 0) break;
       used[best] = true;
       const o = pool[best];

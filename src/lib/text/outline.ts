@@ -1,9 +1,10 @@
 import * as opentype from 'opentype.js';
 import type { Pt, Stroke } from '../types';
+import { simplify } from '../geometry';
 import { layoutWithMetrics, type FontMetrics, type TextLayout, type TextOpts } from './layout';
 
 export type OutlineFont = opentype.Font;
-export type OutlineOpts = Omit<TextOpts, 'fontId'> & { fontId?: string; /** Bezier flattening tolerance in mm (default 0.05). */ toleranceMm?: number };
+export type OutlineOpts = Omit<TextOpts, 'fontId'> & { fontId?: string; outlineMode?: OutlineMode; /** Bezier flattening tolerance in mm (default 0.05). */ toleranceMm?: number };
 
 export function parseFont(buf: ArrayBuffer): OutlineFont {
   return opentype.parse(buf);
@@ -47,13 +48,17 @@ function flatten(cmds: opentype.PathCommand[], tol: number): Stroke[] {
   return out;
 }
 
-/** Outline-font text. sizeMm is the cap height (measured from the font's "H"). Origin top-left, y down. */
-export function outlineText(font: OutlineFont, text: string, opts: OutlineOpts): TextLayout {
-  const tol = opts.toleranceMm ?? 0.05;
+/** How outline (filled) fonts are drawn by a pen: only the contour is traced. */
+export type OutlineMode = 'contour';
+export const DEFAULT_SIMPLIFY_MM = 0.05;
+
+/** FontMetrics for an outline font; sizeMm is the cap height (measured from the font's "H"), same meaning as stroke fonts. */
+export function outlineMetrics(font: OutlineFont, sizeMm: number, toleranceMm = DEFAULT_SIMPLIFY_MM, _mode: OutlineMode = 'contour'): FontMetrics {
+  const tol = toleranceMm;
   const hb = font.charToGlyph('H').getBoundingBox();
   const capUnits = hb.y2 - hb.y1 > 0 ? hb.y2 - hb.y1 : font.unitsPerEm * 0.7;
-  const k = opts.sizeMm / capUnits; // mm per font unit
-  const fm: FontMetrics = {
+  const k = sizeMm / capUnits; // mm per font unit
+  return {
     advance(ch) {
       const g = font.charToGlyph(ch);
       if (!g || g.index === 0) return ch === ' ' ? (font.charToGlyph(' ').advanceWidth ?? font.unitsPerEm * 0.3) * k : null;
@@ -63,8 +68,17 @@ export function outlineText(font: OutlineFont, text: string, opts: OutlineOpts):
       const g = font.charToGlyph(ch);
       // getPath(x, y, fontSize): font units scale = fontSize/unitsPerEm, y already flipped to y-down
       const path = g.getPath(x, baselineY, k * font.unitsPerEm);
-      return flatten(path.commands, tol);
+      // flatten() closes every contour; simplify keeps both endpoints so closure survives
+      return flatten(path.commands, Math.min(tol, DEFAULT_SIMPLIFY_MM)).map((s) => {
+        const r = simplify(s, tol);
+        return r.length >= 3 ? r : s;
+      });
     },
   };
+}
+
+/** Outline-font text (contour mode). sizeMm is the cap height. Origin top-left, y down. */
+export function outlineText(font: OutlineFont, text: string, opts: OutlineOpts): TextLayout {
+  const fm = outlineMetrics(font, opts.sizeMm, opts.toleranceMm ?? DEFAULT_SIMPLIFY_MM, opts.outlineMode ?? 'contour');
   return layoutWithMetrics(text, { fontId: opts.fontId ?? 'outline', ...opts }, fm);
 }
