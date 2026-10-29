@@ -1,63 +1,39 @@
 <script lang="ts">
-  // Vertical pen-height stick. Push up to raise, down to lower; it springs back to the middle on release. Like the joystick it asks
-  // for one bounded step per tick, never queues, and stops at once on release, blur, hidden tab or leaving the page.
-  import { zStepFromStick, DEFAULT_Z } from '../lib/joystick';
-
-  let { z, contact, disabled = false, onstep, onrelease }: {
-    z: number | null; contact: number; disabled?: boolean; onstep: (dz: number) => void; onrelease?: () => void;
-  } = $props();
-  const H = 260, TRACK = H - 56;
-  let el: HTMLDivElement | undefined = $state();
-  let knob = $state(0); // -1..1, up positive
-  let held = false, v = 0;
+  // Vertical height slider: top = pen up (bigger Z), bottom = pen down (smaller Z). The thumb shows where the pen REALLY is
+  // (the controller's reading) until you drag it; while you drag, the pen follows the thumb in short steps, and it stops the
+  // moment you let go.
+  let { z, min, max, disabled = false, onstep }: { z: number | null; min: number; max: number; disabled?: boolean; onstep: (dz: number) => void } = $props();
+  let target = $state<number | null>(null);
   let timer: ReturnType<typeof setInterval> | undefined;
+  const shown = $derived(target ?? z ?? min);
 
-  function release() {
-    if (!held && !timer) return;
-    held = false; v = 0; knob = 0; clearInterval(timer); timer = undefined; onrelease?.();
+  function stop() { target = null; clearInterval(timer); timer = undefined; }
+  function loop() {
+    if (target === null || z === null || disabled) return;
+    const dz = Math.max(-1, Math.min(1, target - z));
+    if (Math.abs(dz) >= 0.02) onstep(dz);
   }
-  function tick() {
-    if (!held || disabled || z === null) return;
-    const dz = zStepFromStick(v, z, contact, DEFAULT_Z);
-    if (dz) onstep(dz);
-  }
-  function move(e: PointerEvent) {
-    if (!held || !el) return;
-    const b = el.getBoundingClientRect();
-    v = Math.max(-1, Math.min(1, -((e.clientY - (b.top + b.height / 2)) / ((TRACK / 2) * (b.height / H)))));
-    knob = v;
-  }
-  function down(e: PointerEvent) {
+  function oninput(e: Event) {
     if (disabled) return;
-    el?.setPointerCapture(e.pointerId); held = true; move(e);
-    clearInterval(timer); timer = setInterval(tick, DEFAULT_Z.tickMs); tick();
+    target = +(e.currentTarget as HTMLInputElement).value;
+    if (!timer) { timer = setInterval(loop, 160); loop(); }
   }
   $effect(() => {
-    const stop = () => release(), vis = () => { if (document.hidden) release(); };
-    window.addEventListener('blur', stop); window.addEventListener('pagehide', stop); document.addEventListener('visibilitychange', vis);
-    return () => { window.removeEventListener('blur', stop); window.removeEventListener('pagehide', stop); document.removeEventListener('visibilitychange', vis); release(); };
+    const out = () => stop(), vis = () => { if (document.hidden) stop(); };
+    window.addEventListener('blur', out); window.addEventListener('pagehide', out); window.addEventListener('pointerup', out); window.addEventListener('keyup', out); document.addEventListener('visibilitychange', vis);
+    return () => { window.removeEventListener('blur', out); window.removeEventListener('pagehide', out); window.removeEventListener('pointerup', out); window.removeEventListener('keyup', out); document.removeEventListener('visibilitychange', vis); stop(); };
   });
-  $effect(() => { if (disabled) release(); });
+  $effect(() => { if (disabled) stop(); });
 </script>
 
-<div class="z" class:off={disabled}>
-  <div class="lab top">UP<br /><span>raises the pen</span></div>
-  <div class="track" bind:this={el} role="application" aria-label="Pen height: push up to raise, down to lower" tabindex="-1"
-       style="height:{H}px" onpointerdown={down} onpointermove={move} onpointerup={release} onpointercancel={release} onlostpointercapture={release}>
-    <div class="rail"></div>
-    <div class="mid"></div>
-    <div class="knob" class:on={knob !== 0} style="top:{H / 2 - 22 - knob * (TRACK / 2)}px"></div>
-  </div>
-  <div class="lab bot">DOWN<br /><span>toward the paper</span></div>
+<div class="z">
+  <span class="end">UP</span>
+  <input type="range" {min} {max} step="0.05" value={shown} {disabled} {oninput} onchange={stop} aria-label="Pen height: drag up to raise, down to lower" />
+  <span class="end">DOWN</span>
 </div>
 
 <style>
-  .z { display: grid; justify-items: center; gap: 4px; width: 86px; }
-  .off { opacity: .45; }
-  .track { position: relative; width: 70px; touch-action: none; user-select: none; cursor: grab; }
-  .rail { position: absolute; left: 31px; top: 6px; bottom: 6px; width: 8px; border-radius: 4px; background: var(--soft); border: 1px solid var(--line); }
-  .mid { position: absolute; left: 12px; right: 12px; top: 50%; border-top: 1.5px dashed var(--line); }
-  .knob { position: absolute; left: 13px; width: 44px; height: 44px; border-radius: 50%; background: var(--surface); border: 2.5px solid var(--ink); }
-  .knob.on { background: var(--accent); border-color: var(--accent); }
-  .lab { font-size: 11px; letter-spacing: .08em; color: var(--mute); text-align: center; line-height: 1.2; } .lab span { letter-spacing: 0; font-size: 10px; }
+  .z { display: grid; justify-items: center; gap: 6px; }
+  .end { font-size: 11px; letter-spacing: .08em; color: var(--mute); }
+  input[type='range'] { writing-mode: vertical-lr; direction: rtl; width: 44px; height: 260px; margin: 0; padding: 0; accent-color: var(--accent); cursor: grab; }
 </style>

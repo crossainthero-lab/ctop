@@ -76,7 +76,7 @@ try:
     for _ in range(10): call('jog', dx=0.0, dy=-6.0, feed=2400)
     r = call('pen_hover'); check('aim height is just above the pen-up height', r['ok'] and abs(r['result']['pos'][2] - r['result']['hover']) < 0.05, str(r))
     check('Z step of more than 1 mm refused', not call('z_nudge', dz=2.0)['ok'])
-    r = call('dot'); check('a dot below the controller floor is refused and the pen stays up', not r['ok'] and 'floor' in r['error'] and state()['controller']['pos'][2] >= 24, str(r))
+    r = call('dot'); check('a dot lower than the controller floor works (the floor follows)', r['ok'] and r['result']['downZ'] < 16, str(r))
     call('set_setting', key='surfaceZ', value=20.3)
     r = call('dot'); check('test dot lowers then returns to aim height', r['ok'] and abs(r['result']['pos'][2] - state()['controller']['pos'][2]) < 0.05 and True, str(r))
     r = call('pen_raise'); check('pen up raises to travel height', r['ok'] and r['result']['pos'][2] >= 24, str(r))

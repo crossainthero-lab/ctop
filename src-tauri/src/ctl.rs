@@ -50,6 +50,10 @@ pub fn allowed(cmd: &str) -> bool {
         "!homexy confirmed" => return true,
         _ => {}
     }
+    // lowering the controller's Z floor (it never goes below its own hard minimum)
+    if let Some(n) = c.strip_prefix("!zfloor ") {
+        return n.parse::<f64>().map(|v| v.is_finite() && (0.0..=150.0).contains(&v)).unwrap_or(false);
+    }
     if let Some(n) = c.strip_prefix("!log ") {
         return !n.is_empty() && n.len() <= 5 && n.chars().all(|ch| ch.is_ascii_digit());
     }
@@ -127,6 +131,8 @@ pub struct CtlStatus {
     pub zup: Option<f64>,
     #[serde(alias = "zhard_max")]
     pub zhard_max: Option<f64>,
+    #[serde(alias = "zhard_min")]
+    pub zhard_min: Option<f64>,
     pub init: bool,
     pub homed: bool,
     pub adopted: bool,
@@ -883,8 +889,19 @@ impl Ctl {
         self.manual_guard(&st)?;
         let zfloor = st.zfloor.ok_or("no zfloor")?;
         let zmax = st.zhard_max.unwrap_or(150.0);
-        if !z.is_finite() || z < zfloor.max(z_min) - 1e-9 {
-            return Err(format!("Z {z:.2} is below the controller's own floor ({:.2} mm). That floor is set in the controller, not in CtoP.", zfloor.max(z_min)));
+        if !z.is_finite() {
+            return Err("bad height".into());
+        }
+        if z < zfloor.max(z_min) - 1e-9 {
+            // the controller's floor is just a setting: lower it to what was asked for (its own hard minimum still applies)
+            let hard = st.zhard_min.unwrap_or(4.0);
+            if z < hard - 1e-9 {
+                return Err(format!("Z {z:.2} is below the controller's hard minimum ({hard:.1} mm)."));
+            }
+            let r = send(&self.sock(), &format!("!zfloor {z:.2}"), Duration::from_secs(5))?;
+            if r.contains("REFUSED") {
+                return Err(r);
+            }
         }
         if z > zmax {
             return Err(format!("Z {z:.2} is above the controller maximum {zmax:.2}"));
@@ -894,6 +911,20 @@ impl Ctl {
         }
         let reply = self.do_move(&format!("G1 Z{z:.3} F{:.0}", feed.clamp(30.0, 300.0)))?;
         Ok(parse_pos(&reply).unwrap_or([st.pos.unwrap()[0], st.pos.unwrap()[1], z]))
+    }
+
+    /// Make sure the controller's Z floor is at or below `z` (used before drawing at a low pen-down height).
+    pub fn ensure_floor(&self, z: f64) -> Result<(), String> {
+        let st = self.fresh_status()?;
+        let hard = st.zhard_min.unwrap_or(4.0);
+        let want = z.max(hard);
+        if st.zfloor.map(|f| f > want + 1e-9).unwrap_or(false) {
+            let r = send(&self.sock(), &format!("!zfloor {want:.2}"), Duration::from_secs(5))?;
+            if r.contains("REFUSED") {
+                return Err(r);
+            }
+        }
+        Ok(())
     }
 
     /// Raise the pen to travel height (never lower than the controller's pen-up height).
@@ -1270,11 +1301,11 @@ mod tests {
 
     #[test]
     fn whitelist_blocks_everything_dangerous() {
-        for ok in ["!status", "!progress", "!cancel", "!estop", "!draw off", "!draw on", "!log 50", "G1 X10.000 Y20.5 F3000", "G1 Z24.000 F300", "!homexy confirmed", "!jobcheck /tmp/a/b.json", "!jobfile /home/u/x.json"] {
+        for ok in ["!status", "!progress", "!cancel", "!estop", "!draw off", "!draw on", "!zfloor 4", "!log 50", "G1 X10.000 Y20.5 F3000", "G1 Z24.000 F300", "!homexy confirmed", "!jobcheck /tmp/a/b.json", "!jobfile /home/u/x.json"] {
             assert!(allowed(ok), "{ok}");
         }
         for bad in [
-            "!home", "!home confirmed", "!homexy", "!homexy now", "!homexy  confirmed x", "!adopt 1 2 3 4 5", "!rearm confirmed", "!box 0 1 0 1", "!zfloor 1", "!zup 99", "!nopencil confirmed", "!pencil",
+            "!home", "!home confirmed", "!homexy", "!homexy now", "!homexy  confirmed x", "!adopt 1 2 3 4 5", "!rearm confirmed", "!box 0 1 0 1", "!zfloor", "!zfloor abc", "!zup 99", "!nopencil confirmed", "!pencil",
             "G28", "G92 X0", "G91", "M104 S200", "M140 S60", "M109 S200", "M112", "M410", "M106 S255", "G1 X1 E5", "G1", "G1 Xabc", "G1 X1; M104 S200", "G1 X1\nM104 S200",
             "!jobfile relative.json", "!jobfile /tmp/a b.json", "!jobfile /tmp/../etc/x.json", "!jobfile /tmp/x.txt", "!log abc", "!status extra", "", "G0 X1", "M105",
         ] {

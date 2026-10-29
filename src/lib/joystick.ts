@@ -15,7 +15,7 @@ export interface JoyOpts {
   flipY?: boolean;
 }
 
-export const DEFAULT_JOY: JoyOpts = { speedMmS: 12, tickMs: 140, deadzone: 0.1, maxStepMm: 20 };
+export const DEFAULT_JOY: JoyOpts = { speedMmS: 12, tickMs: 140, deadzone: 0.1, maxStepMm: 30 };
 
 /** Stick deflection (vx right, vy DOWN on screen, each -1..1 as a fraction of the radius) -> one machine step, or null. */
 export function stepFromStick(vx: number, vy: number, o: JoyOpts): { dx: number; dy: number } | null {

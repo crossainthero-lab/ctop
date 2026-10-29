@@ -369,6 +369,8 @@ impl Writer {
         let prof = crate::ctl::read_profiles(&self.ctl.root());
         let depth = p.pen_depth.unwrap_or_else(|| self.setting_f("depth", prof.write_depth_mm.unwrap_or(0.5)));
         let feed = self.setting_f("feed", DRAW_FEED);
+        // the controller's Z floor is only a setting: bring it down to the pen-down height this calibration needs (with room for a tilted plane)
+        self.ctl.ensure_floor(p.surface_z - depth - 3.0)?;
         let view = self.ctl.prepare_sheet(name, &sheet, &strokes, p.page_w, p.page_h, depth, feed)?;
         if !view.accepted {
             return Err(format!("the plotter's safety check rejected the job: {}", view.reason.unwrap_or_default()));
@@ -586,7 +588,7 @@ impl Writer {
     fn z_nudge_inner(&self, dz: f64) -> Result<Value, String> {
         let pos = self.ctl.fresh_status()?.pos.ok_or("position unknown")?;
         self.ctl.confirm_sheet("calibration", true)?;
-        let p = self.ctl.move_z(pos[2] + dz, self.z_min(), if dz < 0.0 { 60.0 } else { 300.0 })?;
+        let p = self.ctl.move_z(pos[2] + dz, self.z_min(), if dz < 0.0 { 180.0 } else { 300.0 })?;
         Ok(json!({ "pos": p, "contact": self.contact_at(p[0], p[1]), "zMin": self.z_min() }))
     }
 
@@ -596,22 +598,18 @@ impl Writer {
         self.check_manual_ok()?;
         let st = self.ctl.fresh_status()?;
         let pos = st.pos.ok_or("position unknown")?;
-        let hover = st.zup.ok_or("no pen-up height")? + 0.5;
-        // values still being tried on the calibration page win over the saved ones, so a test dot shows what saving would give
         let depth = depth.unwrap_or_else(|| self.active_frame().and_then(|f| f.pen_depth).unwrap_or_else(|| self.setting_f("depth", 0.6)));
-        if !(0.2..=1.0).contains(&depth) {
-            return Err("Writing pressure must be between 0.2 and 1.0 mm.".into());
-        }
-        let down = (contact.unwrap_or_else(|| self.contact_at(pos[0], pos[1])) - depth).max(self.z_min());
+        let down = contact.unwrap_or_else(|| self.contact_at(pos[0], pos[1])) - depth;
         self.ctl.confirm_sheet("calibration", true)?;
-        if pos[2] > hover + 0.05 {
-            self.ctl.move_z(hover, self.z_min(), 300.0)?;
+        // the pen is already on the paper (at or below the pen-down height): the dot is just where it is
+        if pos[2] <= down + 0.05 {
+            return Ok(json!({ "pos": pos, "downZ": pos[2] }));
         }
-        let r = self.ctl.move_z(down, self.z_min(), 60.0);
-        let up = self.ctl.move_z(hover, self.z_min(), 300.0); // always come back up, even if the lowering failed
+        let r = self.ctl.move_z(down, self.z_min(), 120.0);
+        let up = self.ctl.move_z(pos[2], self.z_min(), 300.0); // back to where it was, even if the lowering failed
         r?;
         let p = up?;
-        diag::info("calibrate", format!("test dot at X{:.1} Y{:.1}, pen-down Z{:.2}", pos[0], pos[1], down));
+        diag::info("calibrate", format!("dot at X{:.1} Y{:.1}, pen-down Z{:.2}", pos[0], pos[1], down));
         Ok(json!({ "pos": p, "downZ": down }))
     }
 
