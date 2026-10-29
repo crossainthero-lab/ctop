@@ -9,7 +9,7 @@
   import { checkStrokes, reachInsets, A4, type Reach } from './lib/frame';
   import PagePreview from './components/PagePreview.svelte';
   import LiveCamera from './components/LiveCamera.svelte';
-  import Calibrate from './components/Calibrate.svelte';
+  import Calibration from './components/Calibration.svelte';
   import Setup from './components/Setup.svelte';
   import Technical from './components/Technical.svelte';
 
@@ -174,7 +174,7 @@
       </div>
       <div class="chips">
         <button class="chip ghost" onclick={() => (showSetup = true)} title="Plotter connection and settings"><i class="dot" class:ok={plotterOk} class:bad={!st.controller.reachable || st.controller.estop}></i>{plotterText}</button>
-        <button class="chip ghost" onclick={() => (showCal = true)} title="Frame calibration"><i class="dot" class:ok={st.frame.ready} class:warnc={!st.frame.ready}></i>{st.frame.active ? (st.frame.ready ? `Frame: ${st.frame.active.name}` : 'Frame: not verified') : 'Frame: not calibrated'}</button>
+        <button class="chip ghost" onclick={() => (showCal = true)} title="Open calibration"><i class="dot" class:ok={st.frame.ready} class:warnc={!st.frame.ready}></i>{st.frame.active ? (st.frame.ready ? `Frame: ${st.frame.active.name}` : 'Frame: not verified') : 'Frame: not calibrated'}</button>
         <button class="gear ghost" onclick={() => (showSetup = true)} aria-label="Settings">⚙</button>
       </div>
     </header>
@@ -182,7 +182,7 @@
     {#if !st.frame.ready}
       <div class="banner">
         <span>{st.frame.active ? 'The frame calibration has not been verified yet.' : 'One-time setup: tell CtoP where the paper sits and how high the pen touches.'} You can try everything here; drawing unlocks once this is done.</span>
-        <button class="primary" onclick={() => (showCal = true)}>Set up the frame</button>
+        <button class="primary" onclick={() => (showCal = true)}>Open calibration</button>
       </div>
     {/if}
 
@@ -355,7 +355,7 @@
       </aside>
     </main>
 
-    {#if showCal}<Calibrate onclose={() => (showCal = false)} />{/if}
+    {#if showCal}<Calibration onclose={() => (showCal = false)} />{/if}
     {#if showSetup}<Setup onclose={() => (showSetup = false)} oncalibrate={() => { showSetup = false; showCal = true; }} ontech={() => { showSetup = false; showTech = true; }} />{/if}
     {#if showTech}<Technical onclose={() => (showTech = false)} />{/if}
   </div>

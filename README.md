@@ -73,17 +73,25 @@ WantedBy=default.target
 
 ## One-time calibration
 
-Open **Set up your A4 frame** (Calibrate). The result is saved as a named profile and drawing never needs the camera
-again. Every step that moves the machine needs an explicit click.
+Open **Calibration** (the *Frame* chip at the top). Everything is done in the browser with an on-screen joystick: no
+terminal, no ruler, no typing coordinates. The result is saved as the profile **A4 Frame** and drawing never needs the
+camera again. The machine only moves while you drag the joystick or press a button.
 
-1. **Plotter and homing** - confirm the controller is ready, then *Home X/Y now*.
-2. **Where the paper sits** - fix the A4 sheet to the bed. Enter its position (or use *Suggest position* when a camera
-   is connected) and check it against the machine's reach.
-3. **Pen contact height** - move the pen over the middle of the sheet, lower in 1 / 0.5 / 0.2 / 0.1 mm steps until the
-   tip just touches, then record.
-4. **Test pattern** - draw the test crosses, measure them on the paper with a ruler and enter the measurements; CtoP
-   corrects offset, rotation and skew, or confirm they are already right.
-5. **Save and use** - give the profile a name.
+1. **Move the pen.** Drag the round joystick (up = away from you, right = right, seen from the front of the printer, the
+   LCD side). Release to stop: every request is one short, bounded step and nothing is queued, so letting go, switching tabs
+   or losing the connection stops the pen within a step. Fine buttons move 0.1 / 1 / 5 mm. *Pen up*, *Aim height* (a few mm
+   over the paper, so you can line the tip up without parallax) and *Test dot* are next to it, and **EMERGENCY STOP** is
+   always visible.
+2. **Mark the sheet.** For each corner (top-left, top-right, bottom-right, bottom-left) press *Aim height*, line the tip up
+   and press *Mark corner*; CtoP makes a small dot, records the position and lifts the pen. A corner the machine cannot reach
+   is skipped with *Can't reach it*, and CtoP asks for points along the sheet's edges instead. A rigid fit (rotation and
+   position only, never stretching) against the real A4 size then gives the sheet's position and tilt, and tells you which mark
+   to redo if the points cannot be an A4 sheet.
+3. **Save calibration.** The preview then shows the real position of the sheet and the part the plotter cannot reach.
+4. **Pen height** (a separate section). Contact height, pressure and pen-down height are shown. Lower or raise in 0.1 / 0.5 mm
+   steps (never below 13.5 mm), make a test dot, *Pen touches here* to record the contact height, and change pressure.
+   The pen is rigid, so if it marks in some places but not others the sheet is not flat: flatten or tape it, or use a spring-loaded
+   pen holder. Do not raise the pressure for the whole page.
 
 Recalibrate only when the frame, the pen, or the machine changes (sheet moved, new pen length, bed re-leveled).
 
@@ -129,7 +137,7 @@ unit tests need nothing external.
 ## Project layout
 
 - `src/` - Svelte 5 + TypeScript UI. `src/lib/plan/` mode planning, `src/lib/write/` page layout and image jobs,
-  `src/lib/text/` fonts, `src/lib/frame.ts` frame maths, `src/components/` screens (Calibrate, Setup, Technical, ...).
+  `src/lib/text/` fonts, `src/lib/frame.ts` frame maths, `src/components/` screens (Calibration, Joystick, Setup, Technical, ...).
 - `src-tauri/src/` - Rust: `ctl.rs` controller client and whitelist, `frame.rs` frame profiles, `writer/` job execution,
   `web.rs` localhost HTTP service, `paper.rs`/`geom.rs` camera and homography, `fonts.rs`, `diag.rs` redacted logs.
 - `tools/` - simulation stack and end-to-end scripts. `packaging/` - desktop entry.

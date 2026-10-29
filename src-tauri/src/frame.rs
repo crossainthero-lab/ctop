@@ -38,6 +38,9 @@ pub struct FrameProfile {
     pub plane_gx: f64,
     #[serde(default)]
     pub plane_gy: f64,
+    /// the points the user marked with the joystick when the position was calibrated (for the record)
+    #[serde(default)]
+    pub marks: Vec<Mark>,
     /// ink stays at least this far inside the paper edges
     pub margin_mm: f64,
     /// "manual" | "camera-assisted"
@@ -73,6 +76,7 @@ impl FrameProfile {
             surface_z,
             plane_gx: 0.0,
             plane_gy: 0.0,
+            marks: vec![],
             margin_mm: 8.0,
             source: "manual".into(),
             verified: false,
@@ -247,6 +251,174 @@ pub fn propose_from_geom(g: &PaperGeom) -> Result<(FrameProfile, Vec<String>), S
     Ok((p, notes))
 }
 
+// ───────────── manual calibration: rigid fit of marked points ─────────────
+
+/// A point marked with the pen over the physical sheet, as the user sees it standing at the front of the printer:
+/// page x runs left to right, page y from the front (low Y) to the back. `kind` is "corner" (name tl/tr/br/bl) or
+/// "edge" (the pen touched that edge somewhere along it; name left/right/front/back).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Mark {
+    pub kind: String,
+    pub name: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Solution {
+    pub origin: [f64; 2],
+    pub skew_deg: f64,
+    pub rms_mm: f64,
+    /// (mark name, residual mm)
+    pub residuals: Vec<(String, f64)>,
+    pub warnings: Vec<String>,
+}
+
+fn residuals(marks: &[Mark], w: f64, h: f64, p: [f64; 3]) -> Vec<f64> {
+    let th = p[2] / 100.0;
+    let (c, s) = (th.cos(), th.sin());
+    let (ex, ey) = ([c, s], [-s, c]);
+    let mut r = vec![];
+    for m in marks {
+        let (dx, dy) = (m.x - p[0], m.y - p[1]);
+        let (u, v) = (dx * ex[0] + dy * ex[1], dx * ey[0] + dy * ey[1]); // the mark in page coordinates
+        match (m.kind.as_str(), m.name.as_str()) {
+            ("corner", "bl") => r.extend([u, v]),
+            ("corner", "br") => r.extend([u - w, v]),
+            ("corner", "tr") => r.extend([u - w, v - h]),
+            ("corner", "tl") => r.extend([u, v - h]),
+            ("edge", "left") => r.push(u),
+            ("edge", "right") => r.push(u - w),
+            ("edge", "front") => r.push(v),
+            ("edge", "back") => r.push(v - h),
+            _ => {}
+        }
+    }
+    r
+}
+
+/// Rigid (rotation + translation only, no scaling) fit of the sheet to the marked points, against the known sheet size.
+/// Returns the sheet's bottom-left origin in pen mm and its small tilt. Errors say which mark to redo or what is still missing.
+pub fn solve_marks(marks: &[Mark], w: f64, h: f64) -> Result<Solution, String> {
+    for m in marks {
+        let ok = matches!((m.kind.as_str(), m.name.as_str()), ("corner", "tl" | "tr" | "br" | "bl") | ("edge", "left" | "right" | "front" | "back"));
+        if !ok || !m.x.is_finite() || !m.y.is_finite() {
+            return Err(format!("Unknown mark '{} {}'.", m.kind, m.name));
+        }
+    }
+    if marks.is_empty() {
+        return Err("Mark at least one corner first.".into());
+    }
+    // starting guess: place the origin from whatever the marks say about it
+    let (mut ox, mut oy, mut nx, mut ny) = (0.0, 0.0, 0.0, 0.0);
+    for m in marks {
+        match (m.kind.as_str(), m.name.as_str()) {
+            ("corner", "bl") => { ox += m.x; oy += m.y; nx += 1.0; ny += 1.0 }
+            ("corner", "br") => { ox += m.x - w; oy += m.y; nx += 1.0; ny += 1.0 }
+            ("corner", "tr") => { ox += m.x - w; oy += m.y - h; nx += 1.0; ny += 1.0 }
+            ("corner", "tl") => { ox += m.x; oy += m.y - h; nx += 1.0; ny += 1.0 }
+            ("edge", "left") => { ox += m.x; nx += 1.0 }
+            ("edge", "right") => { ox += m.x - w; nx += 1.0 }
+            ("edge", "front") => { oy += m.y; ny += 1.0 }
+            ("edge", "back") => { oy += m.y - h; ny += 1.0 }
+            _ => {}
+        }
+    }
+    let mut p = [if nx > 0.0 { ox / nx } else { 0.0 }, if ny > 0.0 { oy / ny } else { 0.0 }, 0.0];
+    let n = residuals(marks, w, h, p).len();
+    if n < 3 {
+        return Err("Not enough marks to fix the sheet's position and tilt. Mark more corners or edge points.".into());
+    }
+    let jac = |p: [f64; 3]| -> Vec<[f64; 3]> {
+        let base = residuals(marks, w, h, p);
+        let mut cols = [vec![], vec![], vec![]];
+        for k in 0..3 {
+            let mut q = p;
+            q[k] += 1e-5;
+            cols[k] = residuals(marks, w, h, q).iter().zip(&base).map(|(a, b)| (a - b) / 1e-5).collect();
+        }
+        (0..base.len()).map(|i| [cols[0][i], cols[1][i], cols[2][i]]).collect()
+    };
+    let mut lambda = 1e-6;
+    for _ in 0..60 {
+        let r = residuals(marks, w, h, p);
+        let j = jac(p);
+        let mut a = [[0.0; 3]; 3];
+        let mut g = [0.0; 3];
+        for (row, rv) in j.iter().zip(&r) {
+            for x in 0..3 {
+                g[x] += row[x] * rv;
+                for y in 0..3 {
+                    a[x][y] += row[x] * row[y];
+                }
+            }
+        }
+        for x in 0..3 {
+            a[x][x] += lambda;
+        }
+        let d = solve3(a, [-g[0], -g[1], -g[2]]).ok_or("The marks do not pin down the sheet's position and tilt yet.")?;
+        let cost = |q: [f64; 3]| residuals(marks, w, h, q).iter().map(|v| v * v).sum::<f64>();
+        let np = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+        if cost(np) <= cost(p) {
+            p = np;
+            lambda = (lambda * 0.3).max(1e-9);
+        } else {
+            lambda *= 10.0;
+        }
+        if d.iter().map(|v| v.abs()).fold(0.0, f64::max) < 1e-9 {
+            break;
+        }
+    }
+    // is everything observable? (position in both axes and tilt)
+    let j = jac(p);
+    let mut a = [[0.0; 3]; 3];
+    for row in &j {
+        for x in 0..3 {
+            for y in 0..3 {
+                a[x][y] += row[x] * row[y];
+            }
+        }
+    }
+    let tr = (a[0][0] + a[1][1] + a[2][2]) / 3.0;
+    let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+    if det / tr.powi(3).max(1e-12) < 1e-3 {
+        return Err("The marks do not fix the sheet yet: you need points on two different sides, and two points along a side to know its tilt.".into());
+    }
+    let per_mark = |m: &Mark| residuals(std::slice::from_ref(m), w, h, p).iter().map(|v| v * v).sum::<f64>().sqrt();
+    let res: Vec<(String, f64)> = marks.iter().map(|m| (format!("{} {}", m.name, m.kind), per_mark(m))).collect();
+    let rms = (res.iter().map(|r| r.1 * r.1).sum::<f64>() / res.len() as f64).sqrt();
+    let skew = p[2] / 100.0 * 180.0 / std::f64::consts::PI;
+    if skew.abs() > 4.0 {
+        return Err(format!("The sheet would be tilted {skew:.1} degrees, which is implausible. Check the marks, especially the one with the largest error."));
+    }
+    if let Some((name, e)) = res.iter().filter(|r| r.1 > 4.0).max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()) {
+        return Err(format!("The marks do not fit an A4 sheet: '{name}' is {e:.1} mm off. Redo that mark."));
+    }
+    let mut warnings = vec![];
+    if let Some((name, e)) = res.iter().filter(|r| r.1 > 2.0).max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()) {
+        warnings.push(format!("'{name}' is {e:.1} mm off the best fit; redo it if you were not sure of that spot."));
+    }
+    Ok(Solution { origin: [p[0], p[1]], skew_deg: skew, rms_mm: rms, residuals: res, warnings })
+}
+
+fn solve3(a: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
+    let det = |m: [[f64; 3]; 3]| m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    let d = det(a);
+    if d.abs() < 1e-18 {
+        return None;
+    }
+    let mut out = [0.0; 3];
+    for k in 0..3 {
+        let mut m = a;
+        for r in 0..3 {
+            m[r][k] = b[r];
+        }
+        out[k] = det(m) / d;
+    }
+    Some(out)
+}
+
 // ───────────── storage ─────────────
 
 pub fn slug(name: &str) -> String {
@@ -411,6 +583,57 @@ mod tests {
         let mut odd = g.clone();
         odd.width_mm = 150.0;
         assert!(!propose_from_geom(&odd).unwrap().1.is_empty());
+    }
+
+    fn mk(kind: &str, name: &str, x: f64, y: f64) -> Mark {
+        Mark { kind: kind.into(), name: name.into(), x, y }
+    }
+
+    /// pen position of page point (u, v) for a sheet at origin o tilted th degrees
+    fn at(o: [f64; 2], th: f64, u: f64, v: f64) -> (f64, f64) {
+        let (s, c) = th.to_radians().sin_cos();
+        (o[0] + c * u - s * v, o[1] + s * u + c * v)
+    }
+
+    #[test]
+    fn solver_recovers_origin_and_tilt_from_reachable_marks_only() {
+        // the real machine can only reach the front-right corner and points along the right and front edges
+        let (o, th) = ([-9.4, 44.2], 0.8);
+        let (br, r1, r2, f1, f2) = (at(o, th, 210.0, 0.0), at(o, th, 210.0, 40.0), at(o, th, 210.0, 250.0), at(o, th, 120.0, 0.0), at(o, th, 60.0, 0.0));
+        let marks = vec![mk("corner", "br", br.0 + 0.2, br.1 - 0.3), mk("edge", "right", r1.0, r1.1), mk("edge", "right", r2.0 - 0.2, r2.1), mk("edge", "front", f1.0, f1.1 + 0.2), mk("edge", "front", f2.0, f2.1)];
+        let s = solve_marks(&marks, 210.0, 297.0).unwrap();
+        assert!((s.origin[0] - o[0]).abs() < 0.6 && (s.origin[1] - o[1]).abs() < 0.6, "{:?}", s.origin);
+        assert!((s.skew_deg - th).abs() < 0.15, "{}", s.skew_deg);
+        assert!(s.rms_mm < 0.5);
+    }
+
+    #[test]
+    fn solver_with_four_corners_and_an_outlier() {
+        let (o, th) = (&[20.0, 30.0], 0.0);
+        let mut marks = vec![mk("corner", "bl", 20.0, 30.0), mk("corner", "br", 230.0, 30.0), mk("corner", "tr", 230.0, 327.0), mk("corner", "tl", 20.0, 327.0)];
+        let ok = solve_marks(&marks, 210.0, 297.0).unwrap();
+        assert!((ok.origin[0] - o[0]).abs() < 1e-3 && ok.skew_deg.abs() < 1e-3);
+        marks[2].y += 12.0; // the top-right mark is far off
+        let e = solve_marks(&marks, 210.0, 297.0).unwrap_err();
+        assert!(e.contains("tr corner"), "{e}");
+    }
+
+    #[test]
+    fn solver_says_what_is_missing() {
+        assert!(solve_marks(&[], 210.0, 297.0).is_err());
+        // one corner: position known but no tilt
+        let e = solve_marks(&[mk("corner", "br", 200.0, 45.0)], 210.0, 297.0).unwrap_err();
+        assert!(e.contains("Not enough") || e.contains("fix the sheet"), "{e}");
+        // two points on the same edge give the tilt but not the other axis
+        let e = solve_marks(&[mk("edge", "right", 200.0, 45.0), mk("edge", "right", 200.0, 200.0)], 210.0, 297.0).unwrap_err();
+        assert!(e.contains("two different sides") || e.contains("Not enough"), "{e}");
+        assert!(solve_marks(&[mk("corner", "xx", 1.0, 1.0)], 210.0, 297.0).is_err());
+    }
+
+    #[test]
+    fn solver_rejects_a_tilt_that_cannot_be_right() {
+        let marks = vec![mk("corner", "bl", 0.0, 0.0), mk("corner", "br", 209.0, 30.0), mk("corner", "tr", 180.0, 330.0), mk("corner", "tl", -30.0, 297.0)];
+        assert!(solve_marks(&marks, 210.0, 297.0).is_err());
     }
 
     #[test]

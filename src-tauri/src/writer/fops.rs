@@ -493,6 +493,143 @@ impl Writer {
     }
 }
 
+static JOG_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The lowest pen height the joystick page will ever command, whatever the controller's own floor is (verified safe limit).
+pub const Z_MIN_VERIFIED: f64 = 13.5;
+
+impl Writer {
+    fn z_min(&self) -> f64 {
+        self.setting_f("zMin", Z_MIN_VERIFIED).max(Z_MIN_VERIFIED)
+    }
+
+    /// Contact height at pen X/Y from the saved frame (a tilted plane), else the surfaceZ setting.
+    fn contact_at(&self, x: f64, y: f64) -> f64 {
+        match self.active_frame() {
+            Some(p) => {
+                let c = p.page_to_pen_pt([p.page_w / 2.0, p.page_h / 2.0]);
+                p.surface_z + p.plane_gx * (x - c[0]) + p.plane_gy * (y - c[1])
+            }
+            None => self.setting_f("surfaceZ", 15.3),
+        }
+    }
+
+    fn check_manual_ok(&self) -> Result<(), String> {
+        if self.is_job_active() {
+            return Err("A drawing is running.".into());
+        }
+        Ok(())
+    }
+
+    /// One bounded joystick step. At most one is ever in flight: a request that arrives while another runs is refused, not
+    /// queued, so releasing the joystick stops motion within one step. Stale requests (older than 0.8 s) are dropped.
+    pub fn jog(&self, dx: f64, dy: f64, feed: f64, sent_ms: Option<u64>) -> Result<Value, String> {
+        use std::sync::atomic::Ordering;
+        self.check_manual_ok()?;
+        if let Some(t) = sent_ms {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            if now.saturating_sub(t) > 800 {
+                return Err("stale".into());
+            }
+        }
+        if JOG_BUSY.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+            return Err("busy".into());
+        }
+        let r = self.ctl.jog_vec(dx, dy, feed);
+        JOG_BUSY.store(false, Ordering::Release);
+        let (pos, clamped) = r?;
+        Ok(json!({ "pos": pos, "clamped": clamped }))
+    }
+
+    /// Lower to the aiming height: a little above the controller's pen-up height, i.e. a few mm over the paper, so the tip
+    /// can be lined up against a corner without parallax. Never touches the paper.
+    pub fn pen_hover(&self) -> Result<Value, String> {
+        self.check_manual_ok()?;
+        let st = self.ctl.fresh_status()?;
+        let hover = st.zup.ok_or("no pen-up height")? + 0.5;
+        self.ctl.confirm_sheet("calibration", true)?;
+        let pos = self.ctl.move_z(hover, self.z_min(), 300.0)?;
+        Ok(json!({ "pos": pos, "hover": hover }))
+    }
+
+    pub fn pen_raise(&self) -> Result<Value, String> {
+        self.check_manual_ok()?;
+        self.ctl.pen_up()?;
+        let pos = self.ctl.fresh_status()?.pos;
+        Ok(json!({ "pos": pos }))
+    }
+
+    /// Move the pen straight down/up by at most 1 mm at the current X/Y (the Pen Height section). Never below the verified limit.
+    pub fn z_nudge(&self, dz: f64) -> Result<Value, String> {
+        self.check_manual_ok()?;
+        if !dz.is_finite() || dz == 0.0 || dz.abs() > 1.0 {
+            return Err("A step is at most 1 mm.".into());
+        }
+        let pos = self.ctl.fresh_status()?.pos.ok_or("position unknown")?;
+        self.ctl.confirm_sheet("calibration", true)?;
+        let p = self.ctl.move_z(pos[2] + dz, self.z_min(), if dz < 0.0 { 60.0 } else { 300.0 })?;
+        Ok(json!({ "pos": p }))
+    }
+
+    /// A small dot at the current X/Y: lower to the pen-down height (contact minus pressure, never below the verified limit),
+    /// then back up to the aiming height.
+    pub fn dot(&self) -> Result<Value, String> {
+        self.check_manual_ok()?;
+        let st = self.ctl.fresh_status()?;
+        let pos = st.pos.ok_or("position unknown")?;
+        let hover = st.zup.ok_or("no pen-up height")? + 0.5;
+        let depth = self.setting_f("depth", 0.6);
+        let down = (self.contact_at(pos[0], pos[1]) - depth).max(self.z_min());
+        self.ctl.confirm_sheet("calibration", true)?;
+        if pos[2] > hover + 0.05 {
+            self.ctl.move_z(hover, self.z_min(), 300.0)?;
+        }
+        let r = self.ctl.move_z(down, self.z_min(), 60.0);
+        let up = self.ctl.move_z(hover, self.z_min(), 300.0); // always come back up, even if the lowering failed
+        r?;
+        let p = up?;
+        diag::info("calibrate", format!("test dot at X{:.1} Y{:.1}, pen-down Z{:.2}", pos[0], pos[1], down));
+        Ok(json!({ "pos": p, "downZ": down }))
+    }
+
+    fn calib_page(&self) -> (f64, f64) {
+        self.active_frame().map(|p| (p.page_w, p.page_h)).unwrap_or((frame::A4[0], frame::A4[1]))
+    }
+
+    pub fn calib_solve(&self, marks: &[frame::Mark]) -> Result<Value, String> {
+        let (w, h) = self.calib_page();
+        let s = frame::solve_marks(marks, w, h)?;
+        Ok(json!(s))
+    }
+
+    /// Fit the marks, keep the contact height/plane/margin of the current frame, save as "A4 Frame" and make it the active frame.
+    pub fn calib_save(&self, marks: Vec<frame::Mark>, name: &str) -> Result<Value, String> {
+        let (w, h) = self.calib_page();
+        let s = frame::solve_marks(&marks, w, h)?;
+        let mut p = self.active_frame().unwrap_or_else(|| FrameProfile::new(name, [0.0, 0.0], 0, 0.0, self.setting_f("surfaceZ", 15.3)));
+        p.name = name.trim().to_string();
+        p.origin_pen = [(s.origin[0] * 100.0).round() / 100.0, (s.origin[1] * 100.0).round() / 100.0];
+        p.rotation = 0;
+        p.skew_deg = (s.skew_deg * 1000.0).round() / 1000.0;
+        p.marks = marks;
+        p.source = "manual-marks".into();
+        p.verified = true;
+        p.verified_at = Some(frame::now_s());
+        self.frame_save(p, true)
+    }
+
+    /// Record the current pen height as the contact height (Pen Height section). Only within the verified range.
+    pub fn contact_here(&self) -> Result<Value, String> {
+        let z = self.ctl.fresh_status()?.pos.ok_or("position unknown")?[2];
+        if z < self.z_min() || z > 30.0 {
+            return Err(format!("{z:.2} mm is outside the range a contact height can have ({:.1} - 30 mm).", self.z_min()));
+        }
+        let mut p = self.active_frame().ok_or("Calibrate the frame position first.")?;
+        p.surface_z = (z * 100.0).round() / 100.0;
+        self.set_setting("surfaceZ", json!(p.surface_z))?;
+        self.frame_save(p, true)
+    }
+}
+
 pub(super) fn strokes_of(a: &Value) -> Result<Vec<Vec<[f64; 2]>>, String> {
     let arr = a.get("strokes").and_then(|s| s.as_array()).ok_or("strokes missing")?;
     if arr.len() > 40000 {
@@ -516,6 +653,10 @@ pub(super) fn profile_of(a: &Value) -> Result<FrameProfile, String> {
 
 pub(super) fn pt(a: &Value, k: &str) -> Result<[f64; 2], String> {
     pt2(a.get(k).ok_or_else(|| format!("{k} missing"))?)
+}
+
+pub(super) fn marks_of(a: &Value) -> Result<Vec<frame::Mark>, String> {
+    serde_json::from_value(a.get("marks").cloned().ok_or("marks missing")?).map_err(|e| format!("bad marks: {e}"))
 }
 
 #[cfg(test)]

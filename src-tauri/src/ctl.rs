@@ -776,7 +776,7 @@ impl Ctl {
         Ok(())
     }
 
-    fn do_move(&self, cmd: &str) -> Result<String, String> {
+    pub(crate) fn do_move(&self, cmd: &str) -> Result<String, String> {
         // `!draw off` makes sure XY moves are only allowed at pen-up height
         let r = send(&self.sock(), "!draw off", Duration::from_secs(5))?;
         if r.contains("REFUSED") {
@@ -844,6 +844,50 @@ impl Ctl {
         }
         self.tick();
         Ok(reply.lines().last().unwrap_or("").to_string())
+    }
+
+    /// One bounded sideways step for the joystick. Only with the pen at or above the controller's pen-up height; the target is
+    /// clamped to the controller's box (0.5 mm inside). Returns the position the controller reports and whether it was clamped.
+    pub fn jog_vec(&self, dx: f64, dy: f64, feed: f64) -> Result<([f64; 3], bool), String> {
+        let _op = self.op.lock().unwrap();
+        if !dx.is_finite() || !dy.is_finite() || dx.abs() > 6.0 || dy.abs() > 6.0 {
+            return Err("a joystick step is at most 6 mm".into());
+        }
+        let st = self.fresh_status()?;
+        self.manual_guard(&st)?;
+        let pos = st.pos.ok_or("position unknown")?;
+        let zup = st.zup.ok_or("no zup")?;
+        if pos[2] < zup - 0.01 {
+            return Err(format!("The pen is too low to move sideways (Z {:.1}). Press Pen Up first.", pos[2]));
+        }
+        let b = st.bbox.ok_or("no box")?;
+        let (tx, ty) = ((pos[0] + dx).clamp(b[0] + 0.5, b[1] - 0.5), (pos[1] + dy).clamp(b[2] + 0.5, b[3] - 0.5));
+        if (tx - pos[0]).abs() < 1e-6 && (ty - pos[1]).abs() < 1e-6 {
+            return Ok((pos, true));
+        }
+        let clamped = (tx - (pos[0] + dx)).abs() > 1e-6 || (ty - (pos[1] + dy)).abs() > 1e-6;
+        let reply = self.do_move(&format!("G1 X{tx:.3} Y{ty:.3} F{:.0}", feed.clamp(60.0, 4000.0)))?;
+        Ok((parse_pos(&reply).unwrap_or([tx, ty, pos[2]]), clamped))
+    }
+
+    /// Z-only move with the caller's lower bound (the joystick page's verified safe Z limit) on top of the controller's own floor.
+    pub fn move_z(&self, z: f64, z_min: f64, feed: f64) -> Result<[f64; 3], String> {
+        let _op = self.op.lock().unwrap();
+        let st = self.fresh_status()?;
+        self.manual_guard(&st)?;
+        let zfloor = st.zfloor.ok_or("no zfloor")?;
+        let zmax = st.zhard_max.unwrap_or(150.0);
+        if !z.is_finite() || z < zfloor.max(z_min) - 1e-9 {
+            return Err(format!("Z {z:.2} is below the safe limit ({:.2} mm)", zfloor.max(z_min)));
+        }
+        if z > zmax {
+            return Err(format!("Z {z:.2} is above the controller maximum {zmax:.2}"));
+        }
+        if z < st.pos.ok_or("position unknown")?[2] && self.inner.lock().unwrap().sheet_confirmed.is_none() {
+            return Err("confirm the sheet is in the frame before lowering the pen".into());
+        }
+        let reply = self.do_move(&format!("G1 Z{z:.3} F{:.0}", feed.clamp(30.0, 300.0)))?;
+        Ok(parse_pos(&reply).unwrap_or([st.pos.unwrap()[0], st.pos.unwrap()[1], z]))
     }
 
     /// Raise the pen to travel height (never lower than the controller's pen-up height).
@@ -1157,6 +1201,17 @@ impl Ctl {
 }
 
 // ───────────── companion services ─────────────
+
+/// "X:1.00 Y:2.00 Z:3.00" line of a controller move reply.
+pub fn parse_pos(reply: &str) -> Option<[f64; 3]> {
+    let line = reply.lines().rev().find(|l| l.trim_start().starts_with("X:"))?;
+    let mut v = [0.0; 3];
+    for (i, k) in ["X:", "Y:", "Z:"].iter().enumerate() {
+        let t = line.split(k).nth(1)?.split_whitespace().next()?;
+        v[i] = t.parse().ok()?;
+    }
+    Some(v)
+}
 
 pub fn port_open(port: u16) -> bool {
     use std::net::{SocketAddr, TcpStream};
@@ -1479,5 +1534,16 @@ mod tests {
         let ctl = Ctl::new(std::env::temp_dir(), Some("/nonexistent/z.sock".into()), None, Arc::new(|_, _| {}));
         ctl.set_config(Some("/nonexistent/z.sock".into()), None);
         assert!(ctl.estop().is_err());
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::parse_pos;
+    #[test]
+    fn reads_the_position_line_of_a_move_reply() {
+        let r = "ok\nX:134.40 Y:187.60 Z:24.50\nVERIFIED";
+        assert_eq!(parse_pos(r), Some([134.4, 187.6, 24.5]));
+        assert_eq!(parse_pos("REFUSED: nope"), None);
     }
 }

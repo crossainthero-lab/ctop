@@ -65,10 +65,35 @@ try:
     call('dismiss')
     t = call('frame_test', profile=prof); check('test pattern drawn', t['ok'], str(t))
     wait(lambda s: s['phase'] == 'finished', 'test pattern'); call('dismiss')
+    # ── joystick / manual calibration endpoints (fake controller) ──
+    call('dismiss')
+    p0 = state()['controller']['pos']
+    r = call('jog', dx=2.0, dy=0.0, feed=600, t=int(time.time() * 1000)); check('jog moves the pen sideways', r['ok'] and abs(r['result']['pos'][0] - (p0[0] + 2)) < 0.05, str(r))
+    check('jog larger than 6 mm refused', not call('jog', dx=7.0, dy=0.0, feed=600)['ok'])
+    r = call('jog', dx=1.0, dy=0.0, feed=600, t=int(time.time() * 1000) - 5000); check('stale jog dropped', not r['ok'] and r['error'] == 'stale', str(r))
+    for _ in range(40): r = call('jog', dx=0.0, dy=6.0, feed=2400)
+    s = state(); check('jog stops at the travel limit (clamped)', r['ok'] and r['result']['clamped'] and s['controller']['pos'][1] <= s['controller']['box'][3] - 0.4, str(s['controller']['pos']))
+    for _ in range(10): call('jog', dx=0.0, dy=-6.0, feed=2400)
+    r = call('pen_hover'); check('aim height is just above the pen-up height', r['ok'] and abs(r['result']['pos'][2] - r['result']['hover']) < 0.05, str(r))
+    check('Z step of more than 1 mm refused', not call('z_nudge', dz=2.0)['ok'])
+    r = call('dot'); check('a dot below the controller floor is refused and the pen stays up', not r['ok'] and 'safe limit' in r['error'] and state()['controller']['pos'][2] >= 24, str(r))
+    call('set_setting', key='surfaceZ', value=20.3)
+    r = call('dot'); check('test dot lowers then returns to aim height', r['ok'] and abs(r['result']['pos'][2] - state()['controller']['pos'][2]) < 0.05 and r['result']['downZ'] >= 13.5, str(r))
+    r = call('pen_raise'); check('pen up raises to travel height', r['ok'] and r['result']['pos'][2] >= 24, str(r))
+    # marks as the user would make them on a sheet at origin (-9, 45) tilted 0.5 degrees: only reachable points
+    import math
+    th = math.radians(0.5); at = lambda u, v: (-9 + math.cos(th) * u - math.sin(th) * v, 45 + math.sin(th) * u + math.cos(th) * v)
+    marks = [dict(kind='corner', name='br', x=at(210, 0)[0], y=at(210, 0)[1]), dict(kind='edge', name='right', x=at(210, 40)[0], y=at(210, 40)[1]), dict(kind='edge', name='right', x=at(210, 240)[0], y=at(210, 240)[1]),
+             dict(kind='edge', name='front', x=at(150, 0)[0], y=at(150, 0)[1]), dict(kind='edge', name='front', x=at(60, 0)[0], y=at(60, 0)[1])]
+    r = call('calib_solve', marks=marks); check('four reachable marks fix origin and tilt', r['ok'] and abs(r['result']['origin'][0] + 9) < 0.1 and abs(r['result']['skewDeg'] - 0.5) < 0.05, str(r))
+    check('one mark alone is not enough', not call('calib_solve', marks=marks[:1])['ok'])
+    r = call('calib_save', marks=marks, name='A4 Frame'); check('calibration saved as A4 Frame', r['ok'] and r['result']['verified'] and r['result']['source'] == 'manual-marks', str(r)[:200])
+    prof['name'] = 'E2E frame'; prof['originPen'] = [29.4, 39.1]; prof['skewDeg'] = 0
     prof['verified'] = True; prof['verifiedAt'] = int(time.time())
     check('profile saved', call('frame_save', profile=prof, activate=True)['ok'])
     svc.send_signal(signal.SIGTERM); svc.wait(); svc = start(); TOKEN = page_token()
     s = state(); check('calibration survives a restart', s['frame']['ready'] and s['frame']['active']['name'] == 'E2E frame' and abs(s['frame']['active']['surfaceZ'] - 20.3) < 1e-9)
+    names = [p['name'] for p in call('frame_list')['result']['profiles']]; check('the marked calibration is stored too', 'A4 Frame' in names, str(names))
     check('can draw with no camera', s['canDraw'])
     # geometry: paper (x, y top-left origin) -> pen (29.4 + x, 39.1 + 297 - y)
     st = [[[40, 150], [140, 150]], [[40, 160], [140, 160]]]
