@@ -289,6 +289,9 @@ pub struct Mark {
     pub name: String,
     pub x: f64,
     pub y: f64,
+    /// pen height when the mark was made (the pen is lowered by hand until it touches before marking)
+    #[serde(default)]
+    pub z: Option<f64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -613,7 +616,7 @@ mod tests {
     }
 
     fn mk(kind: &str, name: &str, x: f64, y: f64) -> Mark {
-        Mark { kind: kind.into(), name: name.into(), x, y }
+        Mark { kind: kind.into(), name: name.into(), x, y, z: None }
     }
 
     /// pen position of page point (u, v) for a sheet at origin o tilted th degrees

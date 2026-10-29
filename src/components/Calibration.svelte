@@ -16,7 +16,7 @@
   let inflight = false, zInflight = false;
   $effect(() => { const p = st.controller.pos; if (p && !inflight && !zInflight) pos = [p[0], p[1], p[2]]; });
   let note = $state('');
-  const zMin = 4; // the controller's own hard minimum; its floor setting follows what you ask for
+  const zMin = 0; // no limit of ours; the controller's floor follows what you ask for
 
   let speed = $state(15);
   const joy = $derived<JoyOpts>({ ...DEFAULT_JOY, speedMmS: speed });
@@ -38,23 +38,19 @@
 
   // corners
   const CORNERS = [['tl', 'Top left'], ['tr', 'Top right'], ['br', 'Bottom right'], ['bl', 'Bottom left']] as const;
-  let marks = $state<Record<string, { x: number; y: number }>>({});
+  let marks = $state<Record<string, { x: number; y: number; z: number }>>({});
   let busy = $state(false);
-  async function mark(name: string) {
-    if (!pos || busy) return;
-    const here = pos; busy = true; note = '';
-    try {
-      const r = await call<{ pos: [number, number, number] }>('dot'); pos = r.pos;
-      marks[name] = { x: Math.round(here[0] * 100) / 100, y: Math.round(here[1] * 100) / 100 };
-      savedMsg = '';
-    } catch (e) { note = errText(e); }
-    finally { busy = false; refresh(); }
+  // The pen is wherever you put it: lower it until it touches the paper, move to the corner, press the corner's button.
+  function mark(name: string) {
+    if (!pos) return;
+    marks[name] = { x: Math.round(pos[0] * 100) / 100, y: Math.round(pos[1] * 100) / 100, z: Math.round(pos[2] * 100) / 100 };
+    savedMsg = '';
   }
   let savedMsg = $state('');
   async function save() {
     busy = true; note = '';
     try {
-      await call('calib_save', { marks: CORNERS.filter(([n]) => marks[n]).map(([n]) => ({ kind: 'corner', name: n, x: marks[n].x, y: marks[n].y })), name: 'A4 Frame' });
+      await call('calib_save', { marks: CORNERS.filter(([n]) => marks[n]).map(([n]) => ({ kind: 'corner', name: n, x: marks[n].x, y: marks[n].y, z: marks[n].z })), name: 'A4 Frame' });
       savedMsg = 'Saved.';
     } catch (e) { note = errText(e); }
     finally { busy = false; refresh(); }
@@ -92,7 +88,7 @@
         <div class="col corners">
           <div class="pos mono">X {pos ? pos[0].toFixed(1) : '–'} · Y {pos ? pos[1].toFixed(1) : '–'}</div>
           {#each CORNERS as [n, label]}
-            <button class:done={!!marks[n]} disabled={!ready || busy || !pos} onclick={() => mark(n)}>{label} corner{marks[n] ? `  ✓  ${marks[n].x}, ${marks[n].y}` : ''}</button>
+            <button class:done={!!marks[n]} disabled={!pos} onclick={() => mark(n)}>{label} corner{marks[n] ? `  ✓  ${marks[n].x}, ${marks[n].y}  Z ${marks[n].z}` : ''}</button>
           {/each}
           <button class="primary" disabled={busy || Object.keys(marks).length === 0} onclick={save}>Save</button>
           {#if savedMsg}<p class="small ok">{savedMsg}</p>{/if}

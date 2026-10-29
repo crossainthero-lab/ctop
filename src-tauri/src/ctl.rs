@@ -894,7 +894,7 @@ impl Ctl {
         }
         if z < zfloor.max(z_min) - 1e-9 {
             // the controller's floor is just a setting: lower it to what was asked for (its own hard minimum still applies)
-            let hard = st.zhard_min.unwrap_or(4.0);
+            let hard = st.zhard_min.unwrap_or(0.0);
             if z < hard - 1e-9 {
                 return Err(format!("Z {z:.2} is below the controller's hard minimum ({hard:.1} mm)."));
             }
@@ -916,7 +916,7 @@ impl Ctl {
     /// Make sure the controller's Z floor is at or below `z` (used before drawing at a low pen-down height).
     pub fn ensure_floor(&self, z: f64) -> Result<(), String> {
         let st = self.fresh_status()?;
-        let hard = st.zhard_min.unwrap_or(4.0);
+        let hard = st.zhard_min.unwrap_or(0.0);
         let want = z.max(hard);
         if st.zfloor.map(|f| f > want + 1e-9).unwrap_or(false) {
             let r = send(&self.sock(), &format!("!zfloor {want:.2}"), Duration::from_secs(5))?;

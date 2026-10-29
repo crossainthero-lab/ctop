@@ -632,6 +632,12 @@ impl Writer {
         p.origin_pen = [(s.origin[0] * 100.0).round() / 100.0, (s.origin[1] * 100.0).round() / 100.0];
         p.rotation = 0;
         p.skew_deg = (s.skew_deg * 1000.0).round() / 1000.0;
+        // marks are made with the pen touching the paper, so their height IS the contact height
+        let zs: Vec<f64> = marks.iter().filter_map(|m| m.z).filter(|z| z.is_finite()).collect();
+        if !zs.is_empty() {
+            p.surface_z = (zs.iter().sum::<f64>() / zs.len() as f64 * 100.0).round() / 100.0;
+            let _ = self.set_setting("surfaceZ", json!(p.surface_z));
+        }
         p.marks = marks;
         p.source = "manual-marks".into();
         p.verified = true;
