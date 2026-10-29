@@ -893,6 +893,8 @@ pub fn call(w: &Arc<Writer>, cmd: &str, args: Value) -> Result<Value, String> {
     let ok = |_: ()| Ok(Value::Null);
     match cmd {
         "state" => Ok(w.state()),
+        "cameras" => Ok(w.cameras()),
+        "camera_resume" => w.camera_resume(args["side"].as_bool().unwrap_or(false)).and_then(ok),
         "frame" => w.frame(args["side"].as_bool().unwrap_or(false)),
         "write" => {
             let strokes = strokes_arg(&args)?;

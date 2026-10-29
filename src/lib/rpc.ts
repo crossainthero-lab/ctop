@@ -30,10 +30,9 @@ export async function call<T = unknown>(cmd: string, args?: Record<string, unkno
     const { invoke } = await import('@tauri-apps/api/core');
     return (await invoke<T>('call', { cmd, args: args ?? null })) as T;
   }
-  if (!tok) throw new Error('No access token. Open http://localhost:7795 on the computer that runs CtoP.');
   let res: Response;
   try {
-    res = await fetch('/api/call', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CtoP-Token': tok }, body: JSON.stringify({ cmd, args: args ?? null }) });
+    res = await fetch('/api/call', { method: 'POST', headers: tok ? { 'Content-Type': 'application/json', 'X-CtoP-Token': tok } : { 'Content-Type': 'application/json' }, body: JSON.stringify({ cmd, args: args ?? null }) });
   } catch (e) {
     throw new Error(`CtoP service not reachable (${e instanceof Error ? e.message : e})`);
   }

@@ -383,6 +383,37 @@ impl Writer {
         Ok(())
     }
 
+    fn cam_url(&self, side: bool) -> String {
+        if side {
+            self.lock().settings.get("camera2Url").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or(DEFAULT_CAMERA2).to_string()
+        } else {
+            self.camera_url()
+        }
+    }
+
+    /// Health of both camera hubs, each checked on its own so one failing never hides the other.
+    pub fn cameras(&self) -> Value {
+        let one = |side: bool| {
+            let url = self.cam_url(side);
+            let label = if side { "Side Camera" } else { "Paper Camera" };
+            match paper::http_get(&url, "/api/stats", Duration::from_secs(2)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
+                Some(v) => {
+                    let age = v["camera"]["frame_age_s"].as_f64();
+                    let state = v["camera"]["state"].as_str().unwrap_or("unknown").to_string();
+                    let live = state == "streaming" && age.map(|a| a < 3.0).unwrap_or(false);
+                    json!({ "id": if side { "side" } else { "paper" }, "label": label, "url": url, "hub": true, "live": live, "state": state, "reason": v["camera"]["reason"], "frameAgeS": age })
+                }
+                None => json!({ "id": if side { "side" } else { "paper" }, "label": label, "url": url, "hub": false, "live": false, "state": "offline", "reason": "The camera service is not running.", "frameAgeS": null }),
+            }
+        };
+        json!([one(false), one(true)])
+    }
+
+    /// Ask a camera hub to retry its webcam after a USB hiccup.
+    pub fn camera_resume(&self, side: bool) -> Result<(), String> {
+        paper::http_post(&self.cam_url(side), "/api/resume", Duration::from_secs(5)).map(|_| ())
+    }
+
     pub fn pause(&self) -> Result<(), String> {
         diag::info("draw", "pause requested");
         self.ctl.pause()

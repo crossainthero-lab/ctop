@@ -23,8 +23,7 @@ def pen_bbox():
     xs = [p[0] for s in j['strokes'] for p in s]; ys = [p[1] for s in j['strokes'] for p in s]; return min(xs), max(xs), min(ys), max(ys)
 
 # 0. security
-try: urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{PORT}/api/call', b'{}')); check('API without token refused', False)
-except urllib.error.HTTPError as e: check('API without token refused', e.code == 401)
+r = urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{PORT}/api/call', b'{"cmd":"state"}', {'Content-Type': 'application/json'})); check('local API needs no token', json.load(r)['ok'])
 r = urllib.request.Request(f'http://127.0.0.1:{PORT}/', headers={'Host': 'evil.example'})
 try: urllib.request.urlopen(r); check('foreign Host refused', False)
 except urllib.error.HTTPError as e: check('foreign Host refused', e.code == 403)

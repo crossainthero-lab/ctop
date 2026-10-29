@@ -211,8 +211,10 @@ fn handle(mut s: TcpStream, w: &Arc<Writer>, token: &str, port: u16, dist: &Opti
         if req.method != "POST" || req.path != "/api/call" {
             return respond(&mut s, 405, "text/plain", b"POST /api/call only");
         }
-        if !req.h("x-ctop-token").map(|t| ct_eq(t, token)).unwrap_or(false) {
-            diag::warn("web", "API call without a valid token");
+        // A client on this machine needs no key (Host/Origin were checked above, so web pages cannot reach it). Peers on the
+        // LAN, only possible with CTOP_WEB_BIND, must still present the token.
+        if !local_peer && !req.h("x-ctop-token").map(|t| ct_eq(t, token)).unwrap_or(false) {
+            diag::warn("web", "non-local API call without a valid token");
             return respond(&mut s, 401, "application/json", br#"{"ok":false,"error":"missing or wrong access token"}"#);
         }
         let parsed: Result<Value, _> = serde_json::from_slice(&req.body);
