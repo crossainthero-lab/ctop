@@ -17,6 +17,9 @@ export interface FrameProfile {
   /** contact plane slopes (mm of Z per mm), reference point = page centre */
   planeGx?: number;
   planeGy?: number;
+  /** pressure (mm below contact) and pen-up height saved with the calibration */
+  penDepth?: number | null;
+  penUpZ?: number | null;
   marginMm: number;
   source: 'manual' | 'camera-assisted';
   verified: boolean;

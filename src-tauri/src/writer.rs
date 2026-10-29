@@ -227,6 +227,7 @@ impl Writer {
 
     // ── camera polling ──
     pub fn start(self: &Arc<Self>) {
+        self.apply_pen_up();
         self.ctl.start_poller();
         let me = self.clone();
         std::thread::spawn(move || loop {
@@ -935,8 +936,9 @@ pub fn call(w: &Arc<Writer>, cmd: &str, args: Value) -> Result<Value, String> {
         "jog" => w.jog(args["dx"].as_f64().unwrap_or(0.0), args["dy"].as_f64().unwrap_or(0.0), args["feed"].as_f64().unwrap_or(600.0), args["t"].as_u64()),
         "pen_hover" => w.pen_hover(),
         "pen_raise" => w.pen_raise(),
-        "z_nudge" => w.z_nudge(args["dz"].as_f64().ok_or("dz missing")?),
-        "dot" => w.dot(),
+        "z_nudge" => w.z_nudge(args["dz"].as_f64().ok_or("dz missing")?, args["t"].as_u64()),
+        "pen_save" => w.pen_save(args["contact"].as_f64(), args["depth"].as_f64(), args["penUp"].as_f64()),
+        "dot" => w.dot(args["contact"].as_f64(), args["depth"].as_f64()),
         "contact_here" => w.contact_here(),
         "calib_solve" => w.calib_solve(&fops::marks_of(&args)?),
         "calib_save" => w.calib_save(fops::marks_of(&args)?, args["name"].as_str().unwrap_or("A4 Frame")),

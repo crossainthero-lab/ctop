@@ -38,6 +38,12 @@ pub struct FrameProfile {
     pub plane_gx: f64,
     #[serde(default)]
     pub plane_gy: f64,
+    /// Pressure: how far below the contact height the pen goes when writing. None = use the global setting.
+    #[serde(default)]
+    pub pen_depth: Option<f64>,
+    /// Pen-up (travel) height saved with this calibration. None = use the global setting.
+    #[serde(default)]
+    pub pen_up_z: Option<f64>,
     /// the points the user marked with the joystick when the position was calibrated (for the record)
     #[serde(default)]
     pub marks: Vec<Mark>,
@@ -76,6 +82,8 @@ impl FrameProfile {
             surface_z,
             plane_gx: 0.0,
             plane_gy: 0.0,
+            pen_depth: None,
+            pen_up_z: None,
             marks: vec![],
             margin_mm: 8.0,
             source: "manual".into(),
@@ -100,6 +108,15 @@ impl FrameProfile {
     pub fn page_to_pen_pt(&self, p: [f64; 2]) -> [f64; 2] {
         let a = self.matrix();
         [a[0][0] * p[0] + a[0][1] * p[1] + a[0][2], a[1][0] * p[0] + a[1][1] * p[1] + a[1][2]]
+    }
+
+    /// Is this pen X/Y over the sheet, with `slack` mm to spare around it (negative = inside by that much)?
+    pub fn over_sheet(&self, x: f64, y: f64, slack: f64) -> bool {
+        let m = self.matrix();
+        let (dx, dy) = (x - m[0][2], y - m[1][2]);
+        let det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
+        let (u, v) = ((m[1][1] * dx - m[0][1] * dy) / det, (-m[1][0] * dx + m[0][0] * dy) / det);
+        u >= -slack && u <= self.page_w + slack && v >= -slack && v <= self.page_h + slack
     }
 
     pub fn corners_pen(&self) -> [[f64; 2]; 4] {
@@ -127,6 +144,16 @@ impl FrameProfile {
         }
         if !self.plane_gx.is_finite() || !self.plane_gy.is_finite() || self.plane_gx.abs() > 0.02 || self.plane_gy.abs() > 0.02 {
             return Err("The contact plane slope is implausible (more than 2 mm of height change per 100 mm).".into());
+        }
+        if let Some(d) = self.pen_depth {
+            if !(0.2..=1.0).contains(&d) {
+                return Err("Writing pressure must be between 0.2 and 1.0 mm.".into());
+            }
+        }
+        if let Some(z) = self.pen_up_z {
+            if !(18.0..=60.0).contains(&z) {
+                return Err("The pen-up height must be between 18 and 60 mm.".into());
+            }
         }
         if !(3.0..=40.0).contains(&self.margin_mm) {
             return Err("The safe margin must be 3 - 40 mm.".into());
@@ -634,6 +661,28 @@ mod tests {
     fn solver_rejects_a_tilt_that_cannot_be_right() {
         let marks = vec![mk("corner", "bl", 0.0, 0.0), mk("corner", "br", 209.0, 30.0), mk("corner", "tr", 180.0, 330.0), mk("corner", "tl", -30.0, 297.0)];
         assert!(solve_marks(&marks, 210.0, 297.0).is_err());
+    }
+
+    #[test]
+    fn over_sheet_follows_the_transform() {
+        let p = prof(); // origin 29.4, 39.1
+        assert!(p.over_sheet(100.0, 100.0, 0.0));
+        assert!(!p.over_sheet(20.0, 100.0, 4.0));
+        assert!(p.over_sheet(27.0, 100.0, 4.0));
+        let q = FrameProfile::new("r", [239.4, 336.1], 180, 0.0, 20.0);
+        assert!(q.over_sheet(100.0, 100.0, 0.0) && !q.over_sheet(250.0, 100.0, 4.0));
+    }
+
+    #[test]
+    fn pen_settings_are_validated() {
+        let mut p = prof();
+        p.pen_depth = Some(1.5);
+        assert!(p.check().is_err());
+        p.pen_depth = Some(0.6);
+        p.pen_up_z = Some(10.0);
+        assert!(p.check().is_err());
+        p.pen_up_z = Some(30.0);
+        assert!(p.check().is_ok());
     }
 
     #[test]

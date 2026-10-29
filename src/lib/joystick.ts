@@ -47,3 +47,29 @@ export function deflection(px: number, py: number, cx: number, cy: number, radiu
   const m = Math.hypot(dx, dy);
   return m > 1 ? { vx: dx / m, vy: dy / m } : { vx: dx, vy: dy };
 }
+
+// ───────── vertical pen-height stick ─────────
+// Physical up = machine Z increasing (the pen rises); down = Z decreasing (toward the paper).
+export const Z_MIN_VERIFIED = 13.5;
+export interface ZOpts {
+  tickMs: number;
+  deadzone: number;
+  /** biggest step far from the paper, mm */
+  farStepMm: number;
+  /** biggest downward step within `nearMm` of the contact height, mm (the backend refuses more than 0.35) */
+  nearStepMm: number;
+  nearMm: number;
+  zMin: number;
+}
+export const DEFAULT_Z: ZOpts = { tickMs: 220, deadzone: 0.12, farStepMm: 1.0, nearStepMm: 0.3, nearMm: 3, zMin: Z_MIN_VERIFIED };
+
+/** Stick deflection (v: +1 = pushed fully UP, -1 = fully DOWN) -> a Z step in mm (+ raises), or null. Never goes below zMin. */
+export function zStepFromStick(v: number, zNow: number, contact: number, o: ZOpts): number | null {
+  if (!isFinite(v) || !isFinite(zNow) || Math.abs(v) < o.deadzone) return null;
+  const m = Math.min(1, Math.abs(v)), curve = Math.pow((m - o.deadzone) / (1 - o.deadzone), 1.4);
+  if (v > 0) { const d = o.farStepMm * curve; return d < 0.02 ? null : d; }
+  const near = zNow - contact <= o.nearMm;
+  let d = (near ? o.nearStepMm : o.farStepMm) * curve;
+  d = Math.min(d, Math.max(0, zNow - o.zMin)); // never below the verified limit
+  return d < 0.02 ? null : -d;
+}

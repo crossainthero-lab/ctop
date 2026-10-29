@@ -145,13 +145,16 @@ impl Writer {
         diag::info("frame", format!("saved calibration profile '{}' (verified={}, origin {:?}, rotation {}+{:.2}, contact z {:.2})", p.name, p.verified, p.origin_pen, p.rotation, p.skew_deg, p.surface_z));
         if activate {
             self.set_setting("activeFrame", json!(p.name))?;
+            self.apply_pen_up();
         }
         Ok(json!(p))
     }
 
     pub fn frame_activate(&self, name: &str) -> Result<(), String> {
         self.frames().load(name)?;
-        self.set_setting("activeFrame", json!(name))
+        self.set_setting("activeFrame", json!(name))?;
+        self.apply_pen_up();
+        Ok(())
     }
 
     pub fn frame_delete(&self, name: &str) -> Result<(), String> {
@@ -364,7 +367,7 @@ impl Writer {
             warnings: vec![format!("pen-down follows the contact plane measured at calibration ({:.2} mm at the page centre, slopes {:.4}/{:.4})", p.surface_z, p.plane_gx, p.plane_gy)],
         };
         let prof = crate::ctl::read_profiles(&self.ctl.root());
-        let depth = self.setting_f("depth", prof.write_depth_mm.unwrap_or(0.5));
+        let depth = p.pen_depth.unwrap_or_else(|| self.setting_f("depth", prof.write_depth_mm.unwrap_or(0.5)));
         let feed = self.setting_f("feed", DRAW_FEED);
         let view = self.ctl.prepare_sheet(name, &sheet, &strokes, p.page_w, p.page_h, depth, feed)?;
         if !view.accepted {
@@ -558,27 +561,64 @@ impl Writer {
         Ok(json!({ "pos": pos }))
     }
 
-    /// Move the pen straight down/up by at most 1 mm at the current X/Y (the Pen Height section). Never below the verified limit.
-    pub fn z_nudge(&self, dz: f64) -> Result<Value, String> {
+    /// Move the pen straight down/up by at most 1 mm at the current X/Y: the vertical slider and the fine buttons. Like the
+    /// joystick it is single-flight and drops stale requests. Near the paper (within 3 mm of the contact height) a downward step is at most
+    /// 0.35 mm, and with a verified frame the pen is not lowered onto the paper unless it is over the sheet. Never below the
+    /// verified limit (13.5 mm) or the controller's own floor.
+    pub fn z_nudge(&self, dz: f64, sent_ms: Option<u64>) -> Result<Value, String> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static Z_BUSY: AtomicBool = AtomicBool::new(false);
         self.check_manual_ok()?;
         if !dz.is_finite() || dz == 0.0 || dz.abs() > 1.0 {
             return Err("A step is at most 1 mm.".into());
         }
+        if let Some(t) = sent_ms {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            if now.saturating_sub(t) > 800 {
+                return Err("stale".into());
+            }
+        }
+        if Z_BUSY.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+            return Err("busy".into());
+        }
+        let r = self.z_nudge_inner(dz);
+        Z_BUSY.store(false, Ordering::Release);
+        r
+    }
+
+    fn z_nudge_inner(&self, dz: f64) -> Result<Value, String> {
         let pos = self.ctl.fresh_status()?.pos.ok_or("position unknown")?;
+        if dz < 0.0 {
+            let contact = self.contact_at(pos[0], pos[1]);
+            if pos[2] - contact < 3.0 + 1e-9 && -dz > 0.35 + 1e-9 {
+                return Err("Near the paper the pen moves down in steps of at most 0.35 mm.".into());
+            }
+            if pos[2] + dz < contact + 1.0 {
+                if let Some(f) = self.active_frame().filter(|f| f.verified) {
+                    if !f.over_sheet(pos[0], pos[1], 4.0) {
+                        return Err("The pen is not over the sheet: it will not be lowered onto the paper here.".into());
+                    }
+                }
+            }
+        }
         self.ctl.confirm_sheet("calibration", true)?;
         let p = self.ctl.move_z(pos[2] + dz, self.z_min(), if dz < 0.0 { 60.0 } else { 300.0 })?;
-        Ok(json!({ "pos": p }))
+        Ok(json!({ "pos": p, "contact": self.contact_at(p[0], p[1]), "zMin": self.z_min() }))
     }
 
     /// A small dot at the current X/Y: lower to the pen-down height (contact minus pressure, never below the verified limit),
     /// then back up to the aiming height.
-    pub fn dot(&self) -> Result<Value, String> {
+    pub fn dot(&self, contact: Option<f64>, depth: Option<f64>) -> Result<Value, String> {
         self.check_manual_ok()?;
         let st = self.ctl.fresh_status()?;
         let pos = st.pos.ok_or("position unknown")?;
         let hover = st.zup.ok_or("no pen-up height")? + 0.5;
-        let depth = self.setting_f("depth", 0.6);
-        let down = (self.contact_at(pos[0], pos[1]) - depth).max(self.z_min());
+        // values still being tried on the calibration page win over the saved ones, so a test dot shows what saving would give
+        let depth = depth.unwrap_or_else(|| self.active_frame().and_then(|f| f.pen_depth).unwrap_or_else(|| self.setting_f("depth", 0.6)));
+        if !(0.2..=1.0).contains(&depth) {
+            return Err("Writing pressure must be between 0.2 and 1.0 mm.".into());
+        }
+        let down = (contact.unwrap_or_else(|| self.contact_at(pos[0], pos[1])) - depth).max(self.z_min());
         self.ctl.confirm_sheet("calibration", true)?;
         if pos[2] > hover + 0.05 {
             self.ctl.move_z(hover, self.z_min(), 300.0)?;
@@ -615,6 +655,43 @@ impl Writer {
         p.verified = true;
         p.verified_at = Some(frame::now_s());
         self.frame_save(p, true)
+    }
+
+    /// Save the pen heights with the active frame: contact, pressure (so pen-down = contact - pressure) and the pen-up travel height.
+    /// These are what Text, Image and Lined paper drawing use. Nothing here moves the machine.
+    pub fn pen_save(&self, contact: Option<f64>, depth: Option<f64>, pen_up: Option<f64>) -> Result<Value, String> {
+        let mut p = self.active_frame().ok_or("Calibrate the sheet position first (the pen heights are saved with it).")?;
+        if let Some(c) = contact {
+            p.surface_z = (c * 100.0).round() / 100.0;
+        }
+        if let Some(d) = depth {
+            p.pen_depth = Some((d * 10.0).round() / 10.0);
+        }
+        if let Some(u) = pen_up {
+            p.pen_up_z = Some(u.round());
+        }
+        let down = p.surface_z - p.pen_depth.unwrap_or_else(|| self.setting_f("depth", 0.6));
+        if down < self.z_min() {
+            return Err(format!("Pen-down would be {down:.2} mm, below the verified limit of {:.1} mm. Use less pressure.", self.z_min()));
+        }
+        if p.surface_z < self.z_min() || p.surface_z > 30.0 {
+            return Err("That contact height is outside the range a contact height can have.".into());
+        }
+        self.set_setting("surfaceZ", json!(p.surface_z))?;
+        if let Some(d) = p.pen_depth {
+            self.set_setting("depth", json!(d))?;
+        }
+        let r = self.frame_save(p, true)?;
+        self.apply_pen_up();
+        Ok(r)
+    }
+
+    /// Use the active frame's saved pen-up height for all manual and calibration moves.
+    pub(super) fn apply_pen_up(&self) {
+        if let Some(z) = self.active_frame().and_then(|f| f.pen_up_z) {
+            crate::ctl::set_travel_z(z);
+            let _ = self.set_setting("travelZ", json!(z));
+        }
     }
 
     /// Record the current pen height as the contact height (Pen Height section). Only within the verified range.

@@ -116,6 +116,32 @@ try:
     call('resume'); s = wait(lambda s: s['job'] and s['job']['state'] == 'running' and s['job']['done'] > d0, 'resumed')
     call('stop'); s = wait(lambda s: s['phase'] == 'ready' and s['message'] == 'Stopped.', 'cancelled')
     check('cancel stops the job and lifts the pen clear of the paper', s['controller']['pos'][2] >= 20.3 + 2.5, str(s['controller']['pos']))
+    # ── vertical control and saved pen heights ──
+    call('dismiss'); call('pen_raise'); call('jog', dx=0.0, dy=0.0, feed=600) if False else None
+    a = call('pen_hover'); check('aim height reached', a['ok'], str(a))
+    t = lambda: int(time.time() * 1000)
+    r = call('z_nudge', dz=-1.0, t=t()); z1 = r['result']['pos'][2]; check('a down step lowers Z (physical down = smaller Z)', r['ok'] and z1 < a['result']['pos'][2] - 0.9, str(r))
+    r = call('z_nudge', dz=0.5, t=t()); check('an up step raises Z', r['ok'] and r['result']['pos'][2] > z1 + 0.4, str(r))
+    for _ in range(4): r = call('z_nudge', dz=-1.0, t=t())
+    zc = state()['controller']['pos'][2]
+    r = call('z_nudge', dz=-1.0, t=t()); check('near the paper a big step down is refused', (not r['ok']) and '0.35' in r['error'] or zc - 20.3 > 3, str(r) + f' z={zc}')
+    r = call('z_nudge', dz=-0.3, t=t()); check('small steps near the paper are allowed', r['ok'], str(r))
+    check('stale Z request dropped', call('z_nudge', dz=0.1, t=t() - 3000)['error'] == 'stale')
+    check('Z step over 1 mm refused', not call('z_nudge', dz=1.5, t=t())['ok'])
+    call('pen_raise'); call('jog', dx=6.0, dy=0.0, feed=2400, t=t())
+    for _ in range(30): call('jog', dx=6.0, dy=0.0, feed=2400, t=t())
+    call('pen_hover')
+    for _ in range(3): call('z_nudge', dz=-1.0, t=t())
+    for _ in range(8): r = call('z_nudge', dz=-0.3, t=t())
+    check('the pen is not lowered onto the paper off the sheet', not r['ok'] and 'not over the sheet' in r['error'], str(r) + str(state()['controller']['pos']))
+    call('pen_raise')
+    check('pen heights below the verified minimum refused', not call('pen_save', contact=14.0, depth=0.8, penUp=30)['ok'])
+    r = call('pen_save', contact=20.3, depth=0.5, penUp=26); check('pen heights saved', r['ok'] and r['result']['penDepth'] == 0.5 and r['result']['penUpZ'] == 26, str(r)[:160])
+    check('saved pen-up height is applied', state()['settings'].get('travelZ') == 26)
+    svc.send_signal(signal.SIGTERM); svc.wait(); svc = start(); TOKEN = page_token()
+    s = state(); f = s['frame']['active']; check('pen heights survive a restart', f['penDepth'] == 0.5 and f['penUpZ'] == 26 and abs(f['surfaceZ'] - 20.3) < 1e-9 and s['settings'].get('travelZ') == 26, str((f['penDepth'], f['penUpZ'])))
+    call('dismiss'); call('draw', strokes=[[[60, 150], [120, 150]]], key='pd1'); wait(lambda s: s['phase'] == 'finished', 'pen-depth job'); call('dismiss')
+    check('drawing uses the saved pressure', abs(last_job()['params']['depth'] - 0.5) < 1e-9, str(last_job()['params']))
     pos = state()['controller']['pos']
     check('homing refused without confirmation', not call('home_xy', confirmed=False)['ok'])
 finally:
