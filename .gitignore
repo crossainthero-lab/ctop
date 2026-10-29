@@ -3,3 +3,14 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 *.log
+audit-screens/
+legacy-ui/
+AUDIT.md
+HANDOVER.md
+__pycache__/
+*.pyc
+*.token
+web_token
+.env*
+data/
+.DS_Store
