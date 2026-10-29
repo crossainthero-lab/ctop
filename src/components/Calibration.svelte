@@ -6,7 +6,7 @@
   import { call } from '../lib/rpc';
   import { DEFAULT_JOY, DEFAULT_Z, fineStep, type Dir, type JoyOpts } from '../lib/joystick';
   import { initialSteps, marksOf, nextEdgeSteps, type Step } from '../lib/calibsteps';
-  import { reachOnPaper, A4, type Reach } from '../lib/frame';
+  import { A4, type Reach } from '../lib/frame';
   import Joystick from './Joystick.svelte';
   import ZSlider from './ZSlider.svelte';
   import LiveCamera from './LiveCamera.svelte';
@@ -65,18 +65,11 @@
   const estop = () => call('estop').catch((e) => (note = errText(e)));
 
   // ── the steps ──
-  let steps = $state<Step[]>(untrack(() => initialSteps(frame, reach)));
+  let steps = $state<Step[]>(initialSteps(null, null));
   let cur = $state(0);
   let result = $state<{ origin: [number, number]; skewDeg: number; rmsMm: number; residuals: [string, number][]; warnings: string[] } | null>(null);
   let solveErr = $state('');
   let saved = $state('');
-  // corners the current guess puts out of reach are skipped up front, with the reason shown
-  $effect(() => {
-    if (cur === 0 && steps.every((s) => s.status === 'todo')) {
-      const un = steps.filter((s) => s.likelyUnreachable);
-      if (un.length) { un.forEach((s) => (s.status = 'skipped')); steps.push(...nextEdgeSteps(steps).slice(0, 4)); advance(); }
-    }
-  });
   function advance() { const i = steps.findIndex((s) => s.status === 'todo'); cur = i < 0 ? steps.length : i; }
   const step = $derived(steps[cur]);
   const doneCount = $derived(steps.filter((s) => s.status === 'done').length);
@@ -126,7 +119,6 @@
 
   // ── A4 diagram (seen from the front of the printer) ──
   const D = 0.62;
-  const unreach = $derived(frame && reach ? reachOnPaper(frame, reach).map((p) => `${p[0] * D},${p[1] * D}`).join(' ') : '');
   const hi = $derived.by(() => {
     if (!step) return null;
     const W = A4.w * D, H = A4.h * D;
@@ -185,97 +177,90 @@
 <div class="scrim" role="presentation">
   <div class="page" role="dialog" aria-modal="true" aria-label="Calibration">
     <header>
-      <div><h2>Calibration</h2><p class="mute small">Move the pen with the joystick, mark the sheet's corners, save. Nothing moves unless you drag or press a button.</p></div>
+      <div><h2>Calibration</h2><p class="mute small">Move the pen with the joystick, mark the sheet, set the pen height, save. Nothing moves unless you drag or press a button.</p></div>
       <div class="hbtn"><button class="estop" onclick={estop} title="Stops everything at once">EMERGENCY STOP</button><button onclick={onclose}>Done</button></div>
     </header>
 
     {#if !st.controller.ready}<p class="err">The plotter is not ready: {st.controller.blockers.join('; ') || st.controller.error}</p>{/if}
 
-    <div class="grid">
-      <!-- left: controls -->
-      <section class="card ctl">
-        <h3>1 · Move the pen <span class="mute small">(X, Y and height)</span></h3>
-        <div class="pos mono">X <b>{pos ? pos[0].toFixed(1) : '–'}</b> &nbsp; Y <b>{pos ? pos[1].toFixed(1) : '–'}</b> &nbsp; Z <b>{pos ? pos[2].toFixed(2) : '–'}</b> mm
-          <span class="state {aimed ? 'ok' : penUp ? 'mute' : 'warn'}">{aimed ? 'aim height' : penUp ? 'pen up' : 'pen low'}</span></div>
-        <div class="sticks">
+    <section class="card move">
+      <h3>1 · Move the pen <span class="mute small">(X, Y and height)</span></h3>
+      <div class="mrow">
+        <div class="stickbox">
           <Joystick opts={joy} disabled={!ready || !pos || pos[2] < zup - 0.2} onstep={stick} />
-          <div class="zcol">
-            <div class="zbox">
-              <ZSlider z={pos ? pos[2] : null} contact={contactL} disabled={!ready || !pos} onstep={zStep} />
-              <div class="zread mono">
-                <div><span class="mute small">now</span><br /><b>{pos ? pos[2].toFixed(2) : '–'}</b></div>
-                <div><span class="mute small">target</span><br /><b>{zTarget !== null ? zTarget.toFixed(2) : '–'}</b></div>
-                <div class="small mute">touches at<br />{contactL.toFixed(2)}</div>
-                <div class="small mute">lowest<br />{Z_LOW.toFixed(1)}</div>
-              </div>
-            </div>
-            <button class="primary" disabled={!ready || busy} onclick={penUpNow}>Raise pen</button>
+          <label class="speed">Speed: {speed} mm/s <input type="range" min="2" max="40" step="1" bind:value={speed} /></label>
+        </div>
+
+        <div class="zbox">
+          <ZSlider z={pos ? pos[2] : null} contact={contactL} disabled={!ready || !pos} onstep={zStep} />
+          <div class="zread mono">
+            <div><span class="mute small">now</span><b>{pos ? pos[2].toFixed(2) : '–'}</b></div>
+            <div><span class="mute small">target</span><b>{zTarget !== null ? zTarget.toFixed(2) : '–'}</b></div>
+            <div><span class="mute small">touches at</span><b>{contactL.toFixed(2)}</b></div>
+            <div><span class="mute small">lowest</span><b>{Z_LOW.toFixed(1)}</b></div>
           </div>
         </div>
-        {#if clampedNote}<p class="small warn">At the machine's travel limit in that direction.</p>{/if}
-        {#if pos && pos[2] < zup - 0.2}<p class="small warn">The pen is low: raise it before moving sideways.</p>{/if}
-        <label>Speed: {speed} mm/s <input type="range" min="2" max="40" step="1" bind:value={speed} /></label>
-        <div class="finerow">
+
+        <div class="side">
+          <div class="pos mono">X <b>{pos ? pos[0].toFixed(1) : '–'}</b><br />Y <b>{pos ? pos[1].toFixed(1) : '–'}</b><br />Z <b>{pos ? pos[2].toFixed(2) : '–'}</b>
+            <div class="state {aimed ? 'ok' : penUp ? 'mute' : 'warn'}">{aimed ? 'aim height' : penUp ? 'pen up' : 'pen low'}</div></div>
           <div class="fgrid">
             <span></span><button disabled={!ready} onclick={() => nudge('forward')} aria-label="Away from you">▲</button><span></span>
             <button disabled={!ready} onclick={() => nudge('left')} aria-label="Left">◀</button><span class="mono small mute">{fine} mm</span><button disabled={!ready} onclick={() => nudge('right')} aria-label="Right">▶</button>
             <span></span><button disabled={!ready} onclick={() => nudge('back')} aria-label="Toward you">▼</button><span></span>
           </div>
+          <div class="seg">{#each [0.1, 1, 5] as sz}<button class:on={fine === sz} onclick={() => (fine = sz)}>{sz}</button>{/each}</div>
+          <div class="small mute">sideways step, mm</div>
           <div class="zfine">
-            <div class="small mute">Pen height</div>
-            <div class="zbtn"><button disabled={!ready || !pos} onclick={() => zFine(-0.5)}>−0.5</button><button disabled={!ready || !pos} onclick={() => zFine(-0.1)}>−0.1</button></div>
-            <div class="zbtn"><button disabled={!ready || !pos} onclick={() => zFine(0.1)}>+0.1</button><button disabled={!ready || !pos} onclick={() => zFine(0.5)}>+0.5</button></div>
-            <div class="small mute">− lowers · + raises</div>
+            <div class="zbtn"><button disabled={!ready || !pos} onclick={() => zFine(-0.5)}>−0.5</button><button disabled={!ready || !pos} onclick={() => zFine(-0.1)}>−0.1</button><button disabled={!ready || !pos} onclick={() => zFine(0.1)}>+0.1</button><button disabled={!ready || !pos} onclick={() => zFine(0.5)}>+0.5</button></div>
+            <div class="small mute">pen height, mm · − lowers · + raises</div>
           </div>
         </div>
-        <div class="seg">{#each [0.1, 1, 5] as sz}<button class:on={fine === sz} onclick={() => (fine = sz)}>{sz} mm sideways</button>{/each}</div>
-        <div class="row3">
-          <button class:primary={!aimed && !!pos && !penUp} disabled={!ready || busy} onclick={aim} title="A few mm above the paper, to line the tip up without parallax">Aim height</button>
-          <button disabled={!ready || busy || !aimed} onclick={dotNow}>Dot</button>
-          <button disabled={!ready || busy} onclick={penUpNow}>Pen up</button>
-        </div>
-        <details><summary class="small mute">Directions wrong?</summary>
-          <p class="small mute">Seen from the front of the printer (LCD side): pushing right moves the pen right, pushing up moves it away from you.</p>
-          <label class="check"><input type="checkbox" checked={flipX} onchange={(e) => setFlip('x', e.currentTarget.checked)} /> Reverse left/right</label>
-          <label class="check"><input type="checkbox" checked={flipY} onchange={(e) => setFlip('y', e.currentTarget.checked)} /> Reverse forward/back</label>
-        </details>
-        {#if note}<p class="small {/Dot made|Saved|set to/.test(note) ? 'ok' : 'err'}">{note}</p>{/if}
+      </div>
 
-        <div class="pen">
-          <h3>2 · Pen height</h3>
-          <p class="small mute">Position the pen over the paper, lower it with the slider until the tip just touches (watch the side camera), then press <b>Pen touches here</b>.</p>
-          <button class="primary big" disabled={!ready || !pos || pos[2] > 24} onclick={touches}>Pen touches here ({pos ? pos[2].toFixed(2) : '–'} mm)</button>
-          <div class="penrow">
-            <div>
-              <div class="small mute">Writing pressure (mm below contact)</div>
-              <div class="stepper"><button onclick={() => setDepth(depthL - 0.1)}>−</button><b class="mono">{depthL.toFixed(1)}</b><button onclick={() => setDepth(depthL + 0.1)}>+</button></div>
-            </div>
-            <div>
-              <div class="small mute">Pen-up height</div>
-              <div class="stepper"><button onclick={() => setPenUp(penUpL - 5)}>−</button><b class="mono">{penUpL}</b><button onclick={() => setPenUp(penUpL + 5)}>+</button></div>
-            </div>
-          </div>
-          <p class="mono">Contact <b>{contactL.toFixed(2)}</b> · pen down <b class:err={!downOk}>{penDownL.toFixed(2)}</b> · pen up <b>{penUpL}</b> mm</p>
-          {#if !downOk}<p class="small err">Pen down would be below the verified limit ({Z_LOW} mm). Use less pressure.</p>{/if}
-          <div class="row">
-            <button disabled={!ready || busy || !aimed} onclick={testDot} title="Lowers to the pen-down height above, makes a dot, comes back up">Test dot</button>
-            <button class="primary" disabled={busy || !frame || !downOk || (!dirty && !!frame)} onclick={savePen}>Save pen height</button>
-          </div>
-          {#if lastDot}<div class="row"><span class="small">Did the dot leave ink?</span><button onclick={() => inked(true)}>Yes</button><button onclick={() => inked(false)}>No</button></div>{/if}
-          {#if varies}<p class="small warn">The pen inked in some places but not others, so one height will not work everywhere: the sheet is not flat. Flatten or tape it, or use a spring-loaded pen holder. Raising the pressure for the whole page would only score the paper where it is highest.</p>{/if}
-          {#if !frame}<p class="small warn">Mark the sheet first (right): the pen heights are saved with that calibration.</p>{/if}
-          {#if savedPen}<p class="small ok">{savedPen}</p>{/if}
+      <div class="actions">
+        <button class="primary" disabled={!ready || busy} onclick={penUpNow}>Raise pen</button>
+        <button class:primary={!aimed && !!pos && !penUp} disabled={!ready || busy} onclick={aim} title="A few mm above the paper, to line the tip up without parallax">Aim height</button>
+        <button disabled={!ready || busy || !aimed} onclick={dotNow}>Dot</button>
+      </div>
+      {#if clampedNote}<p class="small warn">At the machine's travel limit in that direction.</p>{/if}
+      {#if pos && pos[2] < zup - 0.2}<p class="small warn">The pen is low: raise it before moving sideways.</p>{/if}
+      <details><summary class="small mute">Directions wrong?</summary>
+        <p class="small mute">Seen from the front of the printer (LCD side): pushing right moves the pen right, pushing up moves it away from you.</p>
+        <label class="check"><input type="checkbox" checked={flipX} onchange={(e) => setFlip('x', e.currentTarget.checked)} /> Reverse left/right</label>
+        <label class="check"><input type="checkbox" checked={flipY} onchange={(e) => setFlip('y', e.currentTarget.checked)} /> Reverse forward/back</label>
+      </details>
+      {#if note}<p class="small {/Dot made|Saved|set to/.test(note) ? 'ok' : 'err'}">{note}</p>{/if}
+    </section>
+
+    <div class="two">
+      <section class="card pen">
+        <h3>2 · Pen height</h3>
+        <p class="small mute">Over the paper, lower the pen with the slider until the tip just touches (watch the side camera), then press <b>Pen touches here</b>.</p>
+        <button class="primary" disabled={!ready || !pos || pos[2] > 24} onclick={touches}>Pen touches here ({pos ? pos[2].toFixed(2) : '–'} mm)</button>
+        <div class="penrow">
+          <div><div class="small mute">Writing pressure (mm below contact)</div>
+            <div class="stepper"><button onclick={() => setDepth(depthL - 0.1)}>−</button><b class="mono">{depthL.toFixed(1)}</b><button onclick={() => setDepth(depthL + 0.1)}>+</button></div></div>
+          <div><div class="small mute">Pen-up height (mm)</div>
+            <div class="stepper"><button onclick={() => setPenUp(penUpL - 5)}>−</button><b class="mono">{penUpL}</b><button onclick={() => setPenUp(penUpL + 5)}>+</button></div></div>
         </div>
+        <p class="mono small">Contact <b>{contactL.toFixed(2)}</b> · pen down <b class:err={!downOk}>{penDownL.toFixed(2)}</b> · pen up <b>{penUpL}</b> mm</p>
+        {#if !downOk}<p class="small err">Pen down would be below the verified limit ({Z_LOW} mm). Use less pressure.</p>{/if}
+        <div class="row2">
+          <button disabled={!ready || busy || !aimed} onclick={testDot} title="Lowers to the pen-down height above, makes a dot, comes back up">Test dot</button>
+          <button class="primary" disabled={busy || !frame || !downOk || (!dirty && !!frame)} onclick={savePen}>Save pen height</button>
+        </div>
+        {#if lastDot}<div class="row2"><span class="small">Did the dot leave ink?</span><span class="yn"><button onclick={() => inked(true)}>Yes</button><button onclick={() => inked(false)}>No</button></span></div>{/if}
+        {#if varies}<p class="small warn">The pen inked in some places but not others, so one height will not work everywhere: the sheet is not flat. Flatten or tape it, or use a spring-loaded pen holder. Raising the pressure for the whole page would only score the paper where it is highest.</p>{/if}
+        {#if !frame}<p class="small warn">Mark the sheet first: the pen heights are saved with that calibration.</p>{/if}
+        {#if savedPen}<p class="small ok">{savedPen}</p>{/if}
       </section>
 
-      <!-- right: steps -->
       <section class="card stp">
-        <h3>2 · Mark the sheet</h3>
+        <h3>3 · Mark the sheet</h3>
         <div class="diagwrap">
-          <svg viewBox="-34 -22 {A4.w * D + 68} {A4.h * D + 50}" class="diag" role="img" aria-label="A4 sheet seen from the front of the printer">
+          <svg viewBox="-40 -22 {A4.w * D + 90} {A4.h * D + 50}" class="diag" role="img" aria-label="A4 sheet seen from the front of the printer">
             <rect x="0" y="0" width={A4.w * D} height={A4.h * D} class="sheet" />
-            {#if unreach}<clipPath id="sh"><rect x="0" y="0" width={A4.w * D} height={A4.h * D} /></clipPath>
-              <g clip-path="url(#sh)"><rect x="-200" y="-200" width="800" height="800" class="hatch" /><polygon points={unreach} class="reach" /></g>{/if}
             {#each steps as s}{#if s.status === 'done' && s.kind === 'corner'}<circle r="4" class="doneDot"
               cx={{ tl: 0, tr: A4.w * D, br: A4.w * D, bl: 0 }[s.name]} cy={{ tl: 0, tr: 0, br: A4.h * D, bl: A4.h * D }[s.name]} />{/if}{/each}
             {#if hi?.dot}<circle cx={hi.dot[0]} cy={hi.dot[1]} r="9" class="target" />{/if}
@@ -285,7 +270,6 @@
             <text x="-6" y={A4.h * D / 2} text-anchor="end" class="dl">LEFT</text>
             <text x={A4.w * D + 6} y={A4.h * D / 2} class="dl">RIGHT</text>
           </svg>
-          {#if frame && reach}<p class="small mute">Hatched: beyond the machine's travel (from the last saved position).</p>{/if}
         </div>
 
         {#if step}
@@ -334,29 +318,33 @@
 
 <style>
   .scrim { position: fixed; inset: 0; background: var(--bg); z-index: 22; overflow: auto; }
-  .page { max-width: 1100px; margin: 0 auto; padding: 18px 20px 60px; display: grid; gap: 14px; }
-  header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+  .page { max-width: 1180px; margin: 0 auto; padding: 18px 20px 60px; display: grid; gap: 14px; }
+  header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
   .hbtn { display: flex; gap: 8px; }
   .estop { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 700; letter-spacing: .03em; }
-  .grid { display: grid; grid-template-columns: 430px minmax(0, 1fr); gap: 14px; align-items: start; }
-  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
-  .ctl { display: grid; gap: 10px; justify-items: center; }
-  .ctl > * { width: 100%; } .ctl :global(.wrap) { width: auto; }
-  h3 { margin-bottom: 6px; } h3.big { font-size: 18px; margin: 2px 0 6px; }
-  .pos { text-align: center; font-size: 15px; } .state { font-size: 12px; margin-left: 8px; }
-  .sticks { display: flex; gap: 14px; justify-content: center; align-items: flex-start; }
-  .zcol { display: grid; gap: 8px; justify-items: center; } .zbox { display: flex; gap: 8px; } .zread { display: grid; align-content: space-between; text-align: center; font-size: 13px; padding: 4px 0; width: 70px; }
-  .finerow { display: flex; gap: 18px; align-items: center; justify-content: center; } .zfine { display: grid; gap: 6px; justify-items: center; } .zbtn { display: flex; gap: 6px; } .zbtn button { padding: 8px 10px; min-width: 52px; }
-  .pen { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 8px; margin-top: 4px; }
-  .penrow { display: flex; gap: 18px; justify-content: space-between; } .stepper { display: flex; gap: 10px; align-items: center; } .stepper button { width: 38px; padding: 6px 0; }
-  .fine { display: grid; gap: 8px; justify-items: center; }
-  .fgrid { display: grid; grid-template-columns: repeat(3, 52px); gap: 6px; align-items: center; justify-items: center; } .fgrid button { width: 52px; padding: 8px 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
+  h3 { margin-bottom: 8px; } h3.big { font-size: 18px; margin: 2px 0 6px; }
+  .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+
+  /* move: joystick | height stick | readouts and fine controls */
+  .mrow { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .stickbox { display: grid; gap: 10px; width: 260px; } .speed { margin: 0; }
+  .zbox { display: flex; gap: 10px; align-items: flex-start; }
+  .zread { display: grid; gap: 14px; width: 84px; padding-top: 10px; } .zread div { display: grid; } .zread b { font-size: 15px; }
+  .side { display: grid; gap: 10px; justify-items: start; min-width: 220px; }
+  .pos { font-size: 16px; line-height: 1.5; } .pos .state { font-size: 12px; font-family: var(--font); }
+  .fgrid { display: grid; grid-template-columns: repeat(3, 48px); gap: 6px; align-items: center; justify-items: center; } .fgrid button { width: 48px; padding: 8px 0; }
   .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; } .seg button { border: 0; border-radius: 0; background: transparent; padding: 6px 14px; } .seg button.on { background: var(--ink); color: var(--bg); }
-  .row3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .zfine { display: grid; gap: 4px; } .zbtn { display: flex; gap: 6px; } .zbtn button { padding: 8px 0; width: 52px; }
+  .actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; } .actions button { min-width: 120px; }
+
+  .pen { display: grid; gap: 10px; }
+  .penrow { display: flex; gap: 22px; flex-wrap: wrap; } .stepper { display: flex; gap: 10px; align-items: center; } .stepper button { width: 38px; padding: 6px 0; }
+  .row2 { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; } .row2 > button { flex: 1; } .yn { display: flex; gap: 8px; }
+
   .stp { display: grid; gap: 10px; }
-  .diagwrap { display: grid; justify-items: center; } .diag { width: min(260px, 100%); }
+  .diagwrap { display: grid; justify-items: center; } .diag { width: min(200px, 100%); }
   .sheet { fill: #fffefb; stroke: var(--ink); stroke-width: 1.2; }
-  .hatch { fill: rgba(180, 35, 24, .18); } .reach { fill: #fffefb; }
   .target { fill: none; stroke: var(--accent); stroke-width: 3; } .tline { stroke: var(--accent); stroke-width: 4; } .doneDot { fill: var(--ok); }
   .dl { fill: var(--mute); font-size: 9px; letter-spacing: .06em; }
   .instr { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); padding: 12px 14px; }
@@ -366,5 +354,5 @@
   .list .n { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--mute); display: grid; place-items: center; font-size: 12px; flex: none; } .list .done .n { background: var(--ok); border-color: var(--ok); color: #fff; }
   .list .t { flex: 1; } .list .skipped { opacity: .65; }
   .res { border: 1px solid var(--ok); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 6px; }
-  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
 </style>
