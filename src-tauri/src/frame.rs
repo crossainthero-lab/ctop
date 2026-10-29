@@ -32,6 +32,12 @@ pub struct FrameProfile {
     pub skew_deg: f64,
     /// Z (mm) where the pen tip first touches the paper, MEASURED during calibration
     pub surface_z: f64,
+    /// Contact height varies across a sheet (curl, bed tilt): z_contact(x, y) = surface_z + plane_gx*(x - ref_x) + plane_gy*(y - ref_y),
+    /// with (x, y) in pen mm and the reference point at the page centre. Both slopes are mm of Z per mm of travel; 0 = flat.
+    #[serde(default)]
+    pub plane_gx: f64,
+    #[serde(default)]
+    pub plane_gy: f64,
     /// ink stays at least this far inside the paper edges
     pub margin_mm: f64,
     /// "manual" | "camera-assisted"
@@ -65,6 +71,8 @@ impl FrameProfile {
             rotation,
             skew_deg,
             surface_z,
+            plane_gx: 0.0,
+            plane_gy: 0.0,
             margin_mm: 8.0,
             source: "manual".into(),
             verified: false,
@@ -112,6 +120,9 @@ impl FrameProfile {
         }
         if !(0.0..=200.0).contains(&self.surface_z) || !self.surface_z.is_finite() {
             return Err("The pen contact height is not valid.".into());
+        }
+        if !self.plane_gx.is_finite() || !self.plane_gy.is_finite() || self.plane_gx.abs() > 0.02 || self.plane_gy.abs() > 0.02 {
+            return Err("The contact plane slope is implausible (more than 2 mm of height change per 100 mm).".into());
         }
         if !(3.0..=40.0).contains(&self.margin_mm) {
             return Err("The safe margin must be 3 - 40 mm.".into());

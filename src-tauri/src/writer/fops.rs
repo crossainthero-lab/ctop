@@ -358,10 +358,10 @@ impl Writer {
             id: format!("frame:{}", frame::slug(&p.name)),
             label: format!("frame '{}' {:.0}x{:.0} mm, contact z {:.2}", p.name, p.page_w, p.page_h, p.surface_z),
             a: p.matrix(),
-            plane: Plane { x0: c[0], y0: c[1], z0: p.surface_z, gx: 0.0, gy: 0.0 },
+            plane: Plane { x0: c[0], y0: c[1], z0: p.surface_z, gx: p.plane_gx, gy: p.plane_gy },
             page: [p.page_w, p.page_h],
             provisional: !p.verified,
-            warnings: vec![format!("pen-down height is the contact height measured at calibration ({:.2} mm), assuming a flat sheet", p.surface_z)],
+            warnings: vec![format!("pen-down follows the contact plane measured at calibration ({:.2} mm at the page centre, slopes {:.4}/{:.4})", p.surface_z, p.plane_gx, p.plane_gy)],
         };
         let prof = crate::ctl::read_profiles(&self.ctl.root());
         let depth = self.setting_f("depth", prof.write_depth_mm.unwrap_or(0.5));

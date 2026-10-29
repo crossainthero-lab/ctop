@@ -14,6 +14,9 @@ export interface FrameProfile {
   skewDeg: number;
   /** Z where the pen tip first touches the paper (measured) */
   surfaceZ: number;
+  /** contact plane slopes (mm of Z per mm), reference point = page centre */
+  planeGx?: number;
+  planeGy?: number;
   marginMm: number;
   source: 'manual' | 'camera-assisted';
   verified: boolean;
