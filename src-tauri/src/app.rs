@@ -488,6 +488,11 @@ impl AppState {
 
     /// Hardware connection. Gated: the operator must have unlocked hardware mode in Settings.
     pub fn connect_hardware(self: &Arc<Self>, path: Option<String>) -> Result<(), String> {
+        // The printer is owned by the controller (daemon4, libusb). Opening a serial port would pulse DTR (board reset =>
+        // homed frame lost) and compete with it. Direct serial is therefore disabled unless explicitly forced.
+        if std::env::var("CTOP_ALLOW_SERIAL").ok().as_deref() != Some("1") {
+            return Err("Direct serial access is disabled: the printer is owned by the controller process. Use the Controller connection (unix socket) instead. (Developer override: CTOP_ALLOW_SERIAL=1.)".into());
+        }
         if !self.setting_bool("hardwareUnlocked") {
             return Err("Hardware mode is locked. Unlock it in Settings once the calibration session has released the printer and you have physically checked it.".into());
         }
@@ -738,7 +743,8 @@ mod tests {
         let s = state();
         s.select_profile("cr10s-pro").unwrap();
         let e = s.connect_hardware(None).unwrap_err();
-        assert!(e.contains("locked"), "{e}");
+        // direct serial is disabled outright (printer owned by the controller); the unlock gate is behind CTOP_ALLOW_SERIAL
+        assert!(e.contains("Direct serial access is disabled") || e.contains("locked"), "{e}");
     }
 
     #[test]

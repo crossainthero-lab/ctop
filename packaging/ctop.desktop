@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=CtoP
+Comment=Write typed text on paper with a pencil plotter
+Exec=ctop
+Terminal=false
+Categories=Graphics;

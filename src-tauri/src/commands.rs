@@ -2,6 +2,7 @@
 
 use crate::app::*;
 use crate::calibration::Calibration;
+use crate::ctl::{self, Ctl, CtlSnapshot, PrepareReq, PreparedView, ProfileInfo, SheetInfo};
 use crate::gcode::GcodeSettings;
 use crate::machine::{ArmMode, Cmd, LogEntry, Snapshot};
 use crate::planner::{PlanOptions, Stroke};
@@ -228,4 +229,84 @@ pub fn list_system_fonts() -> Vec<FontFile> {
     v.sort_by(|a, b| a.family.cmp(&b.family).then(a.style.cmp(&b.style)));
     v.dedup_by(|a, b| a.family == b.family && a.style == b.style);
     v
+}
+
+// ── controller (unix socket) backend ──
+type C<'a> = State<'a, Arc<Ctl>>;
+
+#[tauri::command]
+pub fn ctl_snapshot(c: C) -> CtlSnapshot {
+    c.snapshot()
+}
+#[tauri::command]
+pub fn ctl_set_config(c: C, sock: Option<String>, root: Option<String>) {
+    c.set_config(sock, root)
+}
+#[tauri::command(async)]
+pub fn ctl_sheets(c: C) -> Vec<SheetInfo> {
+    ctl::list_sheets(&c.root())
+}
+#[tauri::command(async)]
+pub fn ctl_profiles(c: C) -> ProfileInfo {
+    ctl::read_profiles(&c.root())
+}
+#[tauri::command]
+pub fn ctl_confirm_sheet(c: C, sheet_id: String, confirmed: bool) -> R<()> {
+    c.confirm_sheet(&sheet_id, confirmed)
+}
+#[tauri::command(async)]
+pub fn ctl_prepare(c: C, request: PrepareReq) -> R<PreparedView> {
+    c.prepare(request)
+}
+#[tauri::command(async)]
+pub fn ctl_start(c: C) -> R<()> {
+    c.start()
+}
+#[tauri::command(async)]
+pub fn ctl_pause(c: C) -> R<()> {
+    c.pause()
+}
+#[tauri::command(async)]
+pub fn ctl_resume(c: C) -> R<()> {
+    c.resume()
+}
+#[tauri::command(async)]
+pub fn ctl_stop(c: C) -> R<()> {
+    c.stop()
+}
+#[tauri::command(async)]
+pub fn ctl_estop(c: C) -> R<String> {
+    c.estop()
+}
+#[tauri::command]
+pub fn ctl_discard_run(c: C) {
+    c.discard_run()
+}
+#[tauri::command(async)]
+pub fn ctl_jog(c: C, dx: f64, dy: f64) -> R<String> {
+    c.jog_xy(dx, dy)
+}
+#[tauri::command(async)]
+pub fn ctl_goto(c: C, x: f64, y: f64) -> R<String> {
+    c.goto_xy(x, y)
+}
+#[tauri::command(async)]
+pub fn ctl_pen_up(c: C) -> R<String> {
+    c.pen_up()
+}
+#[tauri::command(async)]
+pub fn ctl_z_step(c: C, dz: f64, plane_z: Option<f64>) -> R<String> {
+    c.z_step(dz, plane_z)
+}
+
+// ── companion services ──
+#[tauri::command(async)]
+pub fn service_up(ports: Vec<u16>) -> Vec<bool> {
+    ports.into_iter().map(|p| matches!(p, 7791..=7793 | 7794) && ctl::port_open(p)).collect()
+}
+#[tauri::command(async)]
+pub fn start_worksheets(c: C, s: S) -> R<String> {
+    let _ = &s;
+    let log = std::env::temp_dir().join("ctop-logs");
+    ctl::start_worksheets(&c.root(), &log)
 }

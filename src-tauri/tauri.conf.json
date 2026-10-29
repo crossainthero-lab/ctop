@@ -12,11 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "CtoP — Computer to Pencil",
-        "width": 1480,
-        "height": 920,
-        "minWidth": 1100,
-        "minHeight": 700,
+        "title": "CtoP",
+        "width": 1200,
+        "height": 780,
+        "minWidth": 760,
+        "minHeight": 520,
         "dragDropEnabled": false
       }
     ],
@@ -26,8 +26,8 @@
     "active": true,
     "targets": ["deb"],
     "category": "Graphics",
-    "shortDescription": "Computer to Pencil — pencil plotter controller",
-    "longDescription": "CtoP turns a Marlin 3D printer with a pencil on the print head into a writing, drawing and plotting machine.",
+    "shortDescription": "Computer to Pencil — write on paper with a pencil plotter",
+    "longDescription": "CtoP writes typed text onto paper with a pencil plotter: a camera finds the paper and its ruled lines, and the text is placed exactly where it will be written.",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png"],
     "linux": { "deb": { "depends": ["fonts-dejavu-core"] } }
   }

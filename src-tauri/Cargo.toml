@@ -2,7 +2,7 @@
 name = "ctop"
 version = "0.1.0"
 description = "CtoP — Computer to Pencil"
-authors = ["CtoP"]
+authors = ["CtoP contributors"]
 edition = "2021"
 license = "MIT"
 
