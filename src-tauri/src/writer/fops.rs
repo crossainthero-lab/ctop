@@ -460,6 +460,23 @@ impl Writer {
         }
     }
 
+    /// Save the current full-resolution frame of a camera under <data>/snapshots for troubleshooting (pen contact, ink, alignment).
+    /// `label` is reduced to letters, digits and dashes. Returns the file path.
+    pub fn camera_snapshot(&self, side: bool, label: &str) -> Result<String, String> {
+        let bytes = paper::http_get(&self.cam_url(side), "/frame.jpg", Duration::from_secs(5))?;
+        if bytes.len() < 200 || bytes[0] != 0xFF {
+            return Err("the camera returned no picture".into());
+        }
+        let clean: String = label.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(30).collect();
+        let dir = self.dir.join("snapshots");
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let f = dir.join(format!("{}-{}-{}.jpg", if side { "side" } else { "paper" }, if clean.is_empty() { "snap" } else { &clean }, ms));
+        fs::write(&f, &bytes).map_err(|e| e.to_string())?;
+        diag::info("camera", format!("snapshot saved: {}", f.display()));
+        Ok(f.display().to_string())
+    }
+
     /// Ask a camera hub to retry its webcam after a USB hiccup.
     pub fn camera_resume(&self, side: bool) -> Result<(), String> {
         paper::http_post(&self.cam_url(side), "/api/resume", Duration::from_secs(5)).map(|_| ())

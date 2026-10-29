@@ -896,6 +896,7 @@ pub fn call(w: &Arc<Writer>, cmd: &str, args: Value) -> Result<Value, String> {
         "state" => Ok(w.state()),
         "cameras" => Ok(w.cameras()),
         "camera_set_mode" => w.camera_set_mode(args["side"].as_bool().unwrap_or(false), args["mode"].as_str().ok_or("mode missing")?),
+        "camera_snapshot" => w.camera_snapshot(args["side"].as_bool().unwrap_or(false), args["label"].as_str().unwrap_or("")).map(Value::String),
         "camera_resume" => w.camera_resume(args["side"].as_bool().unwrap_or(false)).and_then(ok),
         "frame" => w.frame(args["side"].as_bool().unwrap_or(false)),
         "write" => {

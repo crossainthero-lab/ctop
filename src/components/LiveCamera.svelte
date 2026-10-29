@@ -68,6 +68,10 @@
     try { await call('camera_set_mode', { side: id === 'side', mode: size === 'auto' ? 'auto' : `${size}@${fps}` }); }
     catch (e) { modeErr[id] = errText(e); }
   }
+  let snapMsg = $state<Record<string, string>>({});
+  async function snap(id: string) {
+    try { snapMsg[id] = 'Saved: ' + (await call<string>('camera_snapshot', { side: id === 'side', label: 'manual' })); } catch (e) { snapMsg[id] = errText(e); }
+  }
   const label = (id: string) => (id === 'paper' ? 'Paper Camera' : 'Side Camera');
 </script>
 
@@ -91,6 +95,7 @@
     </div>
     <p class="small mute now">{#if info[id]?.size}Now {info[id]?.size} @ {info[id]?.fps} fps{#if info[id]?.measuredFps} (measured {info[id]?.measuredFps?.toFixed(0)}){/if}{/if}</p>
     {#if modeErr[id]}<p class="small err">{modeErr[id]}</p>{/if}
+    <button class="ghost small" onclick={() => snap(id)} disabled={!img[id]}>Save snapshot</button>{#if snapMsg[id]}<span class="small mute"> {snapMsg[id]}</span>{/if}
   </figure>
 {/snippet}
 
