@@ -4,7 +4,7 @@
   import { errText } from '../lib/app.svelte';
   import { call } from '../lib/rpc';
 
-  type Info = { id: 'paper' | 'side'; label: string; hub: boolean; live: boolean; state: string; reason: string | null; frameAgeS: number | null };
+  type Info = { id: 'paper' | 'side'; label: string; hub: boolean; live: boolean; state: string; reason: string | null; frameAgeS: number | null; size?: string; fps?: number; measuredFps?: number; wanted?: string };
   const IDS = ['paper', 'side'] as const;
   let open = $state(false);
   let layout = $state<'stack' | 'side'>('stack');
@@ -59,6 +59,15 @@
       else msg = await call<string>('start_camera');
     } catch (e) { msg = errText(e); }
   }
+  const SIZES = [['1920x1080', '1080p (1920×1080)'], ['1280x720', '720p (1280×720)'], ['800x600', '800×600'], ['640x480', '480p (640×480)']];
+  let modeErr = $state<Record<string, string>>({});
+  const wantSize = (id: string) => { const w = info[id]?.wanted ?? 'auto'; return w === 'auto' ? 'auto' : w.split('@')[0]; };
+  const wantFps = (id: string) => { const w = info[id]?.wanted ?? 'auto'; return w === 'auto' ? '30' : w.split('@')[1]; };
+  async function setMode(id: string, size: string, fps: string) {
+    modeErr[id] = '';
+    try { await call('camera_set_mode', { side: id === 'side', mode: size === 'auto' ? 'auto' : `${size}@${fps}` }); }
+    catch (e) { modeErr[id] = errText(e); }
+  }
   const label = (id: string) => (id === 'paper' ? 'Paper Camera' : 'Side Camera');
 </script>
 
@@ -68,6 +77,20 @@
     <div class="shot" role="button" tabindex="0" onclick={() => (big = id)} onkeydown={(e) => e.key === 'Enter' && (big = id)} aria-label="Enlarge {label(id)}">
       {#if img[id]}<img src={img[id]} alt="{label(id)} live view" />{:else}<div class="none"><p class="small mute">{info[id]?.reason ?? 'No picture yet.'}</p><button class="small" onclick={(e) => { e.stopPropagation(); retry(id); }}>Retry</button></div>{/if}
     </div>
+    <div class="qual small">
+      <label>Quality
+        <select value={wantSize(id)} onchange={(e) => setMode(id, e.currentTarget.value, wantFps(id))}>
+          <option value="auto">Auto (best: 1080p)</option>{#each SIZES as [v, n]}<option value={v}>{n}</option>{/each}
+        </select>
+      </label>
+      <label>Frame rate
+        <select value={wantFps(id)} disabled={wantSize(id) === 'auto'} onchange={(e) => setMode(id, wantSize(id), e.currentTarget.value)}>
+          <option value="30">30 fps</option><option value="15">15 fps</option><option value="10">10 fps</option>
+        </select>
+      </label>
+    </div>
+    <p class="small mute now">{#if info[id]?.size}Now {info[id]?.size} @ {info[id]?.fps} fps{#if info[id]?.measuredFps} (measured {info[id]?.measuredFps?.toFixed(0)}){/if}{/if}</p>
+    {#if modeErr[id]}<p class="small err">{modeErr[id]}</p>{/if}
   </figure>
 {/snippet}
 
@@ -113,6 +136,7 @@
   .st.ok i { background: var(--ok); } .st.bad i { background: var(--danger); } .st.warn i { background: var(--warn); }
   .shot { cursor: zoom-in; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; overflow: hidden; display: grid; place-items: center; }
   .shot img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .qual { display: flex; gap: 8px; margin-top: 6px; } .qual label { flex: 1; margin: 0; } .now { margin: 2px 0 0; }
   .none { padding: 10px; text-align: center; color: #bbb; } .none p { margin-bottom: 6px; }
   .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.75); display: grid; place-items: center; z-index: 40; padding: 16px; }
   .lightbox { background: var(--surface); border-radius: var(--radius); padding: 12px; max-width: min(1100px, 100%); max-height: 100%; display: grid; gap: 8px; }

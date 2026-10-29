@@ -60,6 +60,7 @@ impl Writer {
             g.svc.last_slow = Some(Instant::now());
         }
         self.supervise_camera();
+        self.apply_camera_modes();
         self.supervise_controller();
         self.auto_pose();
         self.post_job();

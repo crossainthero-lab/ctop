@@ -401,12 +401,63 @@ impl Writer {
                     let age = v["camera"]["frame_age_s"].as_f64();
                     let state = v["camera"]["state"].as_str().unwrap_or("unknown").to_string();
                     let live = state == "streaming" && age.map(|a| a < 3.0).unwrap_or(false);
-                    json!({ "id": if side { "side" } else { "paper" }, "label": label, "url": url, "hub": true, "live": live, "state": state, "reason": v["camera"]["reason"], "frameAgeS": age })
+                    json!({ "id": if side { "side" } else { "paper" }, "label": label, "url": url, "hub": true, "live": live, "state": state, "reason": v["camera"]["reason"], "frameAgeS": age,
+                        "size": v["mode"]["size"], "fps": v["mode"]["fps"], "measuredFps": v["capture_fps"], "wanted": self.cam_mode(side) })
                 }
                 None => json!({ "id": if side { "side" } else { "paper" }, "label": label, "url": url, "hub": false, "live": false, "state": "offline", "reason": "The camera service is not running.", "frameAgeS": null }),
             }
         };
         json!([one(false), one(true)])
+    }
+
+    /// The mode the user chose for a camera: "auto" (highest the hub offers) or "WxH@fps". Persisted in settings.
+    pub fn cam_mode(&self, side: bool) -> String {
+        let k = if side { "camModeSide" } else { "camModePaper" };
+        self.lock().settings.get(k).and_then(|v| v.as_str()).unwrap_or("auto").to_string()
+    }
+
+    fn parse_mode(m: &str) -> Result<(u32, u32, u32), String> {
+        if m == "auto" {
+            return Ok((1920, 1080, 30));
+        }
+        let (sz, fps) = m.split_once('@').ok_or("bad mode")?;
+        let (w, h) = sz.split_once('x').ok_or("bad mode")?;
+        let t = |x: &str| x.parse::<u32>().map_err(|_| "bad mode".to_string());
+        let (w, h, f) = (t(w)?, t(h)?, t(fps)?);
+        if ![(1920, 1080), (1280, 720), (800, 600), (640, 480)].contains(&(w, h)) || !(5..=30).contains(&f) {
+            return Err("that camera mode is not supported".into());
+        }
+        Ok((w, h, f))
+    }
+
+    /// Reconfigure the real stream (the hub restarts its capture at that size), and remember the choice.
+    pub fn camera_set_mode(&self, side: bool, mode: &str) -> Result<Value, String> {
+        let (w, h, f) = Self::parse_mode(mode)?;
+        let body = json!({ "size": format!("{w}x{h}"), "fps": f }).to_string();
+        paper::http_post_json(&self.cam_url(side), "/api/mode", &body, Duration::from_secs(8)).map_err(|e| format!("The camera did not accept the mode ({e}). Changes are limited to one every few seconds."))?;
+        self.set_setting(if side { "camModeSide" } else { "camModePaper" }, json!(mode))?;
+        diag::info("camera", format!("{} set to {w}x{h}@{f}", if side { "side camera" } else { "paper camera" }));
+        Ok(json!({ "size": format!("{w}x{h}"), "fps": f }))
+    }
+
+    /// Keep each camera in the chosen (or best) mode, e.g. after the hub restarted. Never blocks drawing.
+    pub(super) fn apply_camera_modes(&self) {
+        for side in [false, true] {
+            let url = self.cam_url(side);
+            let Some(v) = paper::http_get(&url, "/api/stats", Duration::from_secs(2)).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { continue };
+            let Ok((w, h, f)) = Self::parse_mode(&self.cam_mode(side)) else { continue };
+            if v["mode"]["size"].as_str() == Some(&format!("{w}x{h}")) && v["mode"]["fps"].as_u64() == Some(f as u64) {
+                continue;
+            }
+            let key = if side { "modeTrySide" } else { "modeTryPaper" };
+            let due = { let mut g = self.lock(); let ok = g.svc.mode_try.get(key).map(|t: &Instant| t.elapsed() > Duration::from_secs(60)).unwrap_or(true); if ok { g.svc.mode_try.insert(key, Instant::now()); } ok };
+            if due {
+                let mode = self.cam_mode(side);
+                if let Err(e) = self.camera_set_mode(side, &mode) {
+                    diag::warn("camera", format!("could not apply camera mode: {e}"));
+                }
+            }
+        }
     }
 
     /// Ask a camera hub to retry its webcam after a USB hiccup.

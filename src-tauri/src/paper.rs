@@ -154,13 +154,22 @@ pub fn http_post(base: &str, path: &str, timeout: Duration) -> Result<Vec<u8>, S
     http_req("POST", base, path, timeout)
 }
 
+/// POST with a JSON body (the camera hub's /api/mode).
+pub fn http_post_json(base: &str, path: &str, body: &str, timeout: Duration) -> Result<Vec<u8>, String> {
+    http_req_body("POST", base, path, timeout, body)
+}
+
 fn http_req(method: &str, base: &str, path: &str, timeout: Duration) -> Result<Vec<u8>, String> {
+    http_req_body(method, base, path, timeout, "")
+}
+
+fn http_req_body(method: &str, base: &str, path: &str, timeout: Duration, body: &str) -> Result<Vec<u8>, String> {
     let (host, port) = parse_base(base)?;
     let addr = (if host == "localhost" { "127.0.0.1" } else { host.as_str() }, port).to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("bad address")?;
     let mut s = TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("camera service not reachable on {host}:{port} ({e})"))?;
     s.set_read_timeout(Some(timeout)).ok();
     s.set_write_timeout(Some(timeout)).ok();
-    s.write_all(format!("{method} {path} HTTP/1.0\r\nHost: {host}:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).map_err(|e| e.to_string())?;
+    s.write_all(format!("{method} {path} HTTP/1.0\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
     s.take(16 << 20).read_to_end(&mut buf).map_err(|e| format!("camera read: {e}"))?;
     let split = buf.windows(4).position(|w| w == b"\r\n\r\n").ok_or("camera sent a malformed response")?;

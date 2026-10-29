@@ -51,6 +51,7 @@ struct Svc {
     pose_try: Option<Instant>,
     post_done: Option<String>,
     motion_ok: Option<Instant>,
+    mode_try: std::collections::HashMap<&'static str, Instant>,
     motion: Value,
     ink: Value,
 }
@@ -894,6 +895,7 @@ pub fn call(w: &Arc<Writer>, cmd: &str, args: Value) -> Result<Value, String> {
     match cmd {
         "state" => Ok(w.state()),
         "cameras" => Ok(w.cameras()),
+        "camera_set_mode" => w.camera_set_mode(args["side"].as_bool().unwrap_or(false), args["mode"].as_str().ok_or("mode missing")?),
         "camera_resume" => w.camera_resume(args["side"].as_bool().unwrap_or(false)).and_then(ok),
         "frame" => w.frame(args["side"].as_bool().unwrap_or(false)),
         "write" => {
